@@ -1,0 +1,10 @@
+pandas
+numpy
+torch
+transformers
+pillow
+requests
+faiss-cpu
+fastapi
+uvicorn
+psycopg[binary]

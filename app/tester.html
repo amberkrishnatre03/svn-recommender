@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SVN Recommender Tester</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #0d0d0f; color: #eee;
+    display: flex; gap: 20px; padding: 20px; min-height: 100vh;
+  }
+  h2 { font-size: 15px; margin-bottom: 10px; color: #f60; letter-spacing: .5px; }
+
+  /* left: setup + stats */
+  .side { width: 260px; flex-shrink: 0; }
+  .box { background: #17171a; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  label { display: block; font-size: 12px; color: #999; margin: 8px 0 4px; }
+  select, button { font-family: inherit; font-size: 14px; }
+  select {
+    width: 100%; padding: 8px; border-radius: 6px;
+    background: #26262b; color: #eee; border: 1px solid #3a3a40;
+  }
+  .chip {
+    display: inline-block; padding: 6px 11px; margin: 3px;
+    background: #26262b; border: 1px solid #3a3a40; border-radius: 20px;
+    font-size: 12px; cursor: pointer; user-select: none;
+  }
+  .chip.on { background: #f60; border-color: #f60; color: #000; font-weight: 600; }
+  .go {
+    width: 100%; padding: 11px; margin-top: 12px; border: 0; border-radius: 8px;
+    background: #f60; color: #000; font-weight: 700; cursor: pointer;
+  }
+  .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+  .stat span:last-child { color: #f60; font-weight: 600; }
+
+  /* middle: the card */
+  .middle { flex: 1; display: flex; flex-direction: column; align-items: center; }
+  .card {
+    width: 330px; background: #17171a; border-radius: 14px; overflow: hidden;
+    position: relative;
+  }
+  .card img { width: 100%; height: 420px; object-fit: cover; display: block; background: #222; }
+  .badges { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; }
+  .badge {
+    padding: 4px 9px; border-radius: 20px; font-size: 10px;
+    font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  }
+  .personalised { background: #f60; color: #000; }
+  .trending { background: #2ecc71; color: #000; }
+  .sponsored { background: #9b59b6; color: #fff; }
+  .wildcard { background: #3498db; color: #000; }
+  .topup { background: #777; color: #000; }
+  .oos { position: absolute; top: 10px; right: 10px; background: #e74c3c;
+         color: #fff; padding: 4px 9px; border-radius: 20px; font-size: 10px; font-weight: 700; }
+  .info { padding: 14px; }
+  .info h3 { font-size: 15px; margin-bottom: 5px; }
+  .meta { font-size: 12px; color: #888; margin-bottom: 3px; }
+  .price { font-size: 17px; color: #f60; font-weight: 700; margin-top: 6px; }
+
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  .act {
+    width: 62px; height: 62px; border-radius: 50%; border: 2px solid #3a3a40;
+    background: #17171a; font-size: 22px; cursor: pointer; color: #eee;
+  }
+  .act:hover { border-color: #f60; }
+  .act small { display: block; font-size: 8px; color: #777; margin-top: -2px; }
+
+  /* right: log */
+  .log { width: 300px; flex-shrink: 0; }
+  .logbox { background: #17171a; border-radius: 10px; padding: 12px;
+            height: 78vh; overflow-y: auto; font-size: 11px; line-height: 1.7; }
+  .logbox div { border-bottom: 1px solid #222; padding: 3px 0; }
+  .hide { display: none; }
+  .empty { text-align: center; padding: 60px 20px; color: #777; }
+</style>
+</head>
+<body>
+
+<!-- ---------- LEFT: setup and stats ---------- -->
+<div class="side">
+  <div class="box" id="setup">
+    <h2>NEW USER</h2>
+    <label>Gender</label>
+    <select id="gender">
+      <option>Male</option>
+      <option>Female</option>
+    </select>
+    <label>Pick 2 or more styles</label>
+    <div id="styles"></div>
+    <button class="go" onclick="startUser()">Start swiping</button>
+  </div>
+
+  <div class="box hide" id="stats">
+    <h2>STATS</h2>
+    <div class="stat"><span>User</span><span id="sUser">-</span></div>
+    <div class="stat"><span>Feeds fetched</span><span id="sFeeds">0</span></div>
+    <div class="stat"><span>Products seen</span><span id="sSeen">0</span></div>
+    <div class="stat"><span>Liked</span><span id="sLiked">0</span></div>
+    <div class="stat"><span>Skipped</span><span id="sSkip">0</span></div>
+    <div class="stat"><span>Left in stack</span><span id="sLeft">0</span></div>
+    <div class="stat"><span>Avg match score</span><span id="sScore">-</span></div>
+    <button class="go" onclick="location.reload()">Reset</button>
+  </div>
+</div>
+
+<!-- ---------- MIDDLE: the product card ---------- -->
+<div class="middle">
+  <div id="stage" class="empty">Pick a gender and styles, then start swiping.</div>
+</div>
+
+<!-- ---------- RIGHT: live log ---------- -->
+<div class="log">
+  <h2>WHAT IS HAPPENING</h2>
+  <div class="logbox" id="logbox"></div>
+</div>
+
+<script>
+const STYLES = ["Streetwear","Oversized","Casual","Old Money","Athleisure","Partywear","Formal"];
+
+let userId = "";
+let stack = [];          // products not yet swiped
+let nextStack = null;    // feed fetched early, waiting
+let swipesSinceFetch = 0;
+let feeds = 0, seen = 0, liked = 0, skipped = 0;
+let scoreTotal = 0, scoreCount = 0;
+
+// Build the style chips.
+STYLES.forEach(s => {
+  const chip = document.createElement("span");
+  chip.className = "chip";
+  chip.textContent = s;
+  chip.onclick = () => chip.classList.toggle("on");
+  document.getElementById("styles").appendChild(chip);
+});
+
+function log(text, colour) {
+  const line = document.createElement("div");
+  line.style.color = colour || "#888";
+  line.textContent = text;
+  const box = document.getElementById("logbox");
+  box.prepend(line);
+}
+
+async function startUser() {
+  const chosen = [...document.querySelectorAll(".chip.on")].map(c => c.textContent);
+  if (chosen.length < 2) { alert("Pick at least 2 styles"); return; }
+
+  const gender = document.getElementById("gender").value;
+  userId = "test_" + Date.now();
+
+  log("POST /onboarding  " + gender + "  " + chosen.join(", "), "#f60");
+
+  const answer = await fetch("/onboarding", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({user_id: userId, gender: gender, styles: chosen})
+  }).then(r => r.json());
+
+  stack = answer.products;
+  feeds = 1;
+  log("got " + stack.length + " products", "#2ecc71");
+
+  document.getElementById("setup").classList.add("hide");
+  document.getElementById("stats").classList.remove("hide");
+  document.getElementById("sUser").textContent = gender;
+  showCard();
+}
+
+function showCard() {
+  const stage = document.getElementById("stage");
+
+  if (stack.length === 0) {
+    if (nextStack) { useNextStack(); return; }
+    stage.innerHTML = "<div class='empty'>Stack empty. Fetching...</div>";
+    getNextFeed(true);
+    return;
+  }
+
+  const p = stack[0];
+  stage.innerHTML = `
+    <div class="card">
+      <img src="${p.image}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22330%22 height=%22420%22><rect width=%22330%22 height=%22420%22 fill=%22%23222%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%23666%22 text-anchor=%22middle%22>no image</text></svg>'">
+      <div class="badges">
+        <span class="badge ${p.source}">${p.source}</span>
+        <span class="badge" style="background:#333;color:#ccc">match ${p.score}</span>
+      </div>
+      ${p.in_stock ? "" : "<span class='oos'>out of stock</span>"}
+      <div class="info">
+        <h3>${p.title}</h3>
+        <div class="meta">${p.brand} &middot; ${p.style}</div>
+        <div class="meta">${p.category} &middot; ${p.subcategory}</div>
+        <div class="price">&#8377;${p.price}</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="act" onclick="swipe('left_swipe')">&#10007;<small>SKIP</small></button>
+      <button class="act" onclick="swipe('right_swipe')">&#10084;<small>LIKE</small></button>
+      <button class="act" onclick="swipe('wishlist')">&#9733;<small>WISH</small></button>
+      <button class="act" onclick="swipe('add_to_cart')">&#128722;<small>CART</small></button>
+    </div>`;
+
+  updateStats();
+}
+
+let pending = [];   // swipes not yet sent to the server
+
+function swipe(action) {
+  const p = stack.shift();
+
+  pending.push({product_id: p.product_id, action: action});
+  seen++;
+  swipesSinceFetch++;
+  if (action === "left_swipe") skipped++; else liked++;
+
+  scoreTotal += p.score; scoreCount++;
+
+  log(action.replace("_", " ") + "  ->  " + p.title.slice(0, 30),
+      action === "left_swipe" ? "#e74c3c" : "#2ecc71");
+
+  // Same as the real app: fetch the next feed when 3 cards remain.
+  if (stack.length <= 3 && !nextStack) getNextFeed(false);
+
+  showCard();
+}
+
+async function getNextFeed(showNow) {
+  const sending = pending;
+  pending = [];
+  swipesSinceFetch = 0;
+
+  log("POST /feed  sending " + sending.length + " swipes", "#f60");
+
+  const answer = await fetch("/feed", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({user_id: userId, interactions: sending})
+  }).then(r => r.json());
+
+  feeds++;
+
+  if (answer.products.length === 0) {
+    document.getElementById("stage").innerHTML =
+      "<div class='empty'>No products left. The user has seen everything.</div>";
+    log("feed empty - catalogue exhausted", "#e74c3c");
+    return;
+  }
+
+  log("got " + answer.products.length + " products (held for later)", "#2ecc71");
+  nextStack = answer.products;
+
+  if (showNow) useNextStack();
+  updateStats();
+}
+
+function useNextStack() {
+  stack = nextStack;
+  nextStack = null;
+  log("--- showing new stack ---", "#fff");
+  showCard();
+}
+
+function updateStats() {
+  document.getElementById("sFeeds").textContent = feeds;
+  document.getElementById("sSeen").textContent = seen;
+  document.getElementById("sLiked").textContent = liked;
+  document.getElementById("sSkip").textContent = skipped;
+  document.getElementById("sLeft").textContent = stack.length;
+  document.getElementById("sScore").textContent =
+    scoreCount ? (scoreTotal / scoreCount).toFixed(3) : "-";
+}
+</script>
+</body>
+</html>
