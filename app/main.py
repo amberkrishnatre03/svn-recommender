@@ -8,7 +8,7 @@ The API your backend calls.
 """
 # python -m uvicorn app.main:app --reload
 
-
+from pydantic import BaseModel, ConfigDict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -21,7 +21,7 @@ app = FastAPI(title="SVN Recommendations")
 
 database.create_table()
 
-
+'''
 class OnboardingRequest(BaseModel):
     user_id: str
     gender: str                 # "Male" or "Female"
@@ -39,7 +39,37 @@ class FeedRequest(BaseModel):
 
 
 class ResetRequest(BaseModel):
+    user_id: str'''
+
+
+class OnboardingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     user_id: str
+    gender: str
+    styles: list[str]
+
+
+class Interaction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: str
+    action: str
+
+
+class FeedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    interactions: list[Interaction]
+
+
+class ResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+
+
 
 
 @app.post("/onboarding")
