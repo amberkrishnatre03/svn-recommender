@@ -19,9 +19,16 @@ ADDRESS = os.getenv("DATABASE_URL")
 # so we store them flattened end to end and reshape them on the way out.
 VECTOR_SIZE = 512
 
-# Open a small set of connections once and reuse them. Without this we would
-# open a new connection on every request and run out under load.
-pool = ConnectionPool(ADDRESS, min_size=2, max_size=10)
+# Reuse a small pool of database connections.
+# Stale connections are checked before use and old/idle connections are recycled.
+pool = ConnectionPool(
+    ADDRESS,
+    min_size=1,
+    max_size=5,
+    check=ConnectionPool.check_connection,
+    max_idle=300,
+    max_lifetime=1800,
+)
 
 
 def connect():
