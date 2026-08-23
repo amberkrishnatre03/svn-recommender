@@ -17,8 +17,14 @@ FEED = {
 }
 
 # Limits so one feed is not all t-shirts.
-MAX_SAME_CATEGORY = 8      # at most 5 Topwear in a feed of 11
+MAX_SAME_CATEGORY = 5      # at most 5 Topwear in a feed of 11
 MAX_SAME_TYPE = 3          # at most 3 T-Shirts, 3 Hoodies, and so on
+
+# How much a brand the user picked at onboarding gets pushed up the ranking.
+# This is a nudge, not a filter: other brands still appear, they just have to
+# score better to get in. A hard filter would shrink the pool so much that the
+# feed would start repeating within days.
+BRAND_BOOST = 0.15
 
 # Male users see Men's products, female users see Women's.
 # Add "Unisex" to a list later when we bring unisex products back.
@@ -76,7 +82,8 @@ def pick_with_variety(rows, scores, how_many, chosen, counts):
 
     return picked
 
-def build_feed(user_tastes, gender, seen_ids):
+
+def build_feed(user_tastes, gender, seen_ids, preferred_brands=None):
     """Return one feed of products for this user."""
     allowed_rows = find_allowed_rows(gender, seen_ids)
 
@@ -84,9 +91,14 @@ def build_feed(user_tastes, gender, seen_ids):
     if len(allowed_rows) == 0:
         return []
 
-    # Score every allowed product against this user's taste.
-        # Score each product by its best match to any of the user's tastes.
+    # Score each product by its best match to any of the user's tastes.
     scores = (catalog.vectors[allowed_rows] @ user_tastes.T).max(axis=1)
+
+    # Brands they picked at onboarding get a small bump, so their favourites
+    # surface more often without pushing everything else out of the feed.
+    if preferred_brands:
+        brands_here = catalog.products["brand"].values[allowed_rows]
+        scores = scores + np.isin(brands_here, preferred_brands) * BRAND_BOOST
 
     # So we can look up any row's score later.
     score_of = dict(zip(allowed_rows, scores))
