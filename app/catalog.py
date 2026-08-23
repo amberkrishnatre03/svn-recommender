@@ -50,6 +50,11 @@ for p in products.to_dict("records"):
 print("loaded", len(products), "products")
 
 
+def has_product(product_id):
+    """True if we know this product. Check before calling get_vector."""
+    return product_id in row_of_product
+
+
 def get_vector(product_id):
     """The numbers for one product."""
     return vectors[row_of_product[product_id]]

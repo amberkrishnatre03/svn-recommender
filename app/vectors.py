@@ -55,8 +55,22 @@ def apply_interaction(tastes, product_id, action):
     Liking a polo should sharpen their Old Money taste, not drag their
     Streetwear taste toward polos.
     """
-    weight = WEIGHTS.get(action, 0.0)
+    # An action name we do not recognise almost always means the backend and
+    # this service disagree on spelling. Nothing would crash, the swipe would
+    # just quietly do nothing, so say so out loud instead.
+    if action not in WEIGHTS:
+        print("WARNING unknown action:", action, "- swipe ignored")
+        return tastes
+
+    weight = WEIGHTS[action]
     if weight == 0:
+        return tastes
+
+    # A product we have never heard of. Usually a test product, or something
+    # added to the catalogue after our last rebuild. Skip this one swipe
+    # rather than failing the whole request.
+    if not catalog.has_product(product_id):
+        print("WARNING unknown product_id:", product_id, "- swipe ignored")
         return tastes
 
     product_vector = catalog.get_vector(product_id)
