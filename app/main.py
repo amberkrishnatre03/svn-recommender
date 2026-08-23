@@ -9,7 +9,7 @@ The API your backend calls.
 # python -m uvicorn app.main:app --reload
 
 from pathlib import Path
-from app import catalog, database, recommend, vectors
+from app import catalog, database, recommend, style_dna, vectors
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
@@ -169,6 +169,16 @@ def trending(gender: str, window: str = "7d", limit: int = 20,
             break
 
     return {"products": products, "count": len(products), "window": window}
+
+@app.get("/style-dna")
+def get_style_dna(user_id: str):
+    """The style breakdown for the profile page slider.
+
+    based_on is how many interactions the percentages come from. Below
+    about 10 the numbers are noise, so the app should hide the widget.
+    An empty list is a normal answer, not an error.
+    """
+    return style_dna.build(user_id)
 
 @app.get("/")
 def tester():
