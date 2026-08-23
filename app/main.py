@@ -4,20 +4,27 @@ The API your backend calls.
     POST /onboarding   new user finished signup, give them their first feed
     POST /feed         send us their swipes, get the next feed
     POST /reset        they have seen everything, show it all again
+    GET  /trending     most interacted with products right now
+    GET  /style-dna    style breakdown for the profile page
     GET  /             the swipe page for testing by hand
 """
 # python -m uvicorn app.main:app --reload
 
 from pathlib import Path
-from app import catalog, database, recommend, style_dna, vectors
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
+from app import catalog, database, recommend, style_dna, vectors
 
 app = FastAPI(title="SVN Recommendations")
 
 database.create_table()
+
+# If a window has nothing in it, try a wider one. A quiet 24 hours is
+# normal, especially early on, and an empty screen looks broken.
+WIDER_WINDOW = {"1d": "7d", "7d": "30d", "30d": None, "most_liked": None}
 
 
 class OnboardingRequest(BaseModel):
@@ -116,41 +123,38 @@ def reset(request: ResetRequest):
     return build_and_save(request.user_id, tastes, gender, [])
 
 
-def catalog_styles():
-    """The style names that actually exist in the catalogue right now."""
-    from app import catalog
-    return catalog.products["style"].dropna().unique().tolist()
-
-
-def build_and_save(user_id, tastes, gender, seen):
-    """Make a feed, then remember what we showed so it never repeats."""
-    products = recommend.build_feed(tastes, gender, seen)
-
-    shown = [p["product_id"] for p in products]
-    database.update_user(user_id, tastes, shown)
-
-    return {"products": products, "count": len(products)}
-
 @app.get("/trending")
 def trending(gender: str, window: str = "7d", limit: int = 20,
              brand: str = None, style: str = None, category: str = None):
-    """Most interacted-with products, worked out by the trending job.
+    """Most interacted with products, worked out by the trending job.
 
     brand takes a comma separated list, so the app can send several at once.
 
-    An empty list is a normal answer, not an error. A narrow window on a
-    quiet day genuinely has nothing to show.
+    If the window asked for is empty we quietly try a wider one, and the
+    "showing" field says which window the products actually came from.
     """
     if gender not in recommend.ALLOWED_GENDER:
         raise HTTPException(400, "gender must be Male or Female")
 
-    if window not in ("1d", "7d", "30d", "most_liked"):
+    if window not in WIDER_WINDOW:
         raise HTTPException(400, "window must be 1d, 7d, 30d or most_liked")
+
     brands = brand.split(",") if brand else None
     allowed = recommend.ALLOWED_GENDER[gender]
 
+    # Keep widening until we find something, or run out of windows to try.
+    showing = window
+    product_ids = []
+
+    while showing and not product_ids:
+        product_ids = database.get_trending(
+            showing, limit * 5, brands, style, category
+        )
+        if not product_ids:
+            showing = WIDER_WINDOW[showing]
+
     products = []
-    for product_id in database.get_trending(window, limit * 5, brands, style, category):
+    for product_id in product_ids:
         if not catalog.has_product(product_id):
             continue
 
@@ -168,7 +172,9 @@ def trending(gender: str, window: str = "7d", limit: int = 20,
         if len(products) == limit:
             break
 
-    return {"products": products, "count": len(products), "window": window}
+    return {"products": products, "count": len(products),
+            "window": window, "showing": showing}
+
 
 @app.get("/style-dna")
 def get_style_dna(user_id: str):
@@ -179,6 +185,22 @@ def get_style_dna(user_id: str):
     An empty list is a normal answer, not an error.
     """
     return style_dna.build(user_id)
+
+
+def catalog_styles():
+    """The style names that actually exist in the catalogue right now."""
+    return catalog.products["style"].dropna().unique().tolist()
+
+
+def build_and_save(user_id, tastes, gender, seen):
+    """Make a feed, then remember what we showed so it never repeats."""
+    products = recommend.build_feed(tastes, gender, seen)
+
+    shown = [p["product_id"] for p in products]
+    database.update_user(user_id, tastes, shown)
+
+    return {"products": products, "count": len(products)}
+
 
 @app.get("/")
 def tester():

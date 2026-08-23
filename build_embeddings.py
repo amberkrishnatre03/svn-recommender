@@ -3,6 +3,8 @@ Turns every product into 512 numbers.
 Run this once. It takes about 10 minutes.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import requests
@@ -16,7 +18,11 @@ model = CLIPModel.from_pretrained("patrickjohncyh/fashion-clip")
 processor = CLIPProcessor.from_pretrained("patrickjohncyh/fashion-clip")
 model.eval()
 
-products = pd.read_csv("data/products_clean.csv")
+# update_products.py sets this so we can build into a scratch folder
+# first and only swap it in once the new files have been checked.
+FOLDER = os.getenv("BUILD_INTO", "data")
+
+products = pd.read_csv(FOLDER + "/products_clean.csv")
 total = len(products)
 print(total, "products")
 
@@ -101,8 +107,8 @@ final_vectors = make_unit_length(final_vectors)
 
 
 # ---------- part 4: save ----------
-np.save("data/product_embeddings.npy", final_vectors.astype("float32"))
-np.save("data/product_ids.npy", products["product_id"].values)
+np.save(FOLDER + "/product_embeddings.npy", final_vectors.astype("float32"))
+np.save(FOLDER + "/product_ids.npy", products["product_id"].values)
 
 print("done")
 print("saved", final_vectors.shape[0], "products,", final_vectors.shape[1], "numbers each")
