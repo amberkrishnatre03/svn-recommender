@@ -8,38 +8,17 @@ The API your backend calls.
 """
 # python -m uvicorn app.main:app --reload
 
-from pydantic import BaseModel, ConfigDict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app import database, recommend, vectors
 
 app = FastAPI(title="SVN Recommendations")
 
 database.create_table()
-
-'''
-class OnboardingRequest(BaseModel):
-    user_id: str
-    gender: str                 # "Male" or "Female"
-    styles: list[str]           # e.g. ["Streetwear", "Oversized"]
-
-
-class Interaction(BaseModel):
-    product_id: str
-    action: str                 # right_swipe, left_swipe, wishlist, add_to_cart, purchase
-
-
-class FeedRequest(BaseModel):
-    user_id: str
-    interactions: list[Interaction] = []
-
-
-class ResetRequest(BaseModel):
-    user_id: str'''
 
 
 class OnboardingRequest(BaseModel):
@@ -70,8 +49,6 @@ class ResetRequest(BaseModel):
     user_id: str
 
 
-
-
 @app.post("/onboarding")
 def onboarding(request: OnboardingRequest):
     """New user picked their styles. Build their taste and give them a feed.
@@ -81,8 +58,22 @@ def onboarding(request: OnboardingRequest):
     if request.gender not in recommend.ALLOWED_GENDER:
         raise HTTPException(400, "gender must be Male or Female")
 
+    if not request.styles:
+        raise HTTPException(400, "styles cannot be empty")
+
     wanted = "Men" if request.gender == "Male" else "Women"
-    tastes = vectors.build_starting_vectors(request.styles, wanted)
+
+    # If none of the style names match our catalogue, that is bad input from
+    # the caller, not a broken service. Say so with a 400 and list what we
+    # actually accept, instead of letting it become a confusing 500.
+    try:
+        tastes = vectors.build_starting_vectors(request.styles, wanted)
+    except Exception:
+        valid = sorted(catalog_styles())
+        raise HTTPException(
+            400,
+            "none of those styles exist. valid styles are: " + ", ".join(valid),
+        )
 
     database.save_new_user(request.user_id, request.gender, tastes)
 
@@ -99,7 +90,9 @@ def feed(request: FeedRequest):
 
     gender, tastes, seen = user
 
-    # Move their taste based on what they did.
+    # Move their taste based on what they did. Unknown products and unknown
+    # action names are skipped inside apply_interaction, so one bad row can
+    # never take down the whole request.
     for one in request.interactions:
         tastes = vectors.apply_interaction(tastes, one.product_id, one.action)
 
@@ -122,6 +115,12 @@ def reset(request: ResetRequest):
     database.clear_seen(request.user_id)
 
     return build_and_save(request.user_id, tastes, gender, [])
+
+
+def catalog_styles():
+    """The style names that actually exist in the catalogue right now."""
+    from app import catalog
+    return catalog.products["style"].dropna().unique().tolist()
 
 
 def build_and_save(user_id, tastes, gender, seen):
