@@ -5,19 +5,28 @@ One table, one row per user:
     user_id   who they are
     gender    Male or Female
     vector    their taste vectors, stored flattened end to end
-    seen_ids  products they have already been shown
+    seen_ids  the last SEEN_LIMIT products they have been shown
 """
 import os
 import numpy as np
 from psycopg_pool import ConnectionPool
 
-# Change 1234 to the password you set when installing Postgres.
-
-ADDRESS = os.getenv("DATABASE_URL")     # storedn  inside render variable as databaseurl
+ADDRESS = os.getenv("DATABASE_URL")     # stored inside render variable as DATABASE_URL
 
 # Each taste vector is 512 numbers. A user has one per style they picked,
 # so we store them flattened end to end and reshape them on the way out.
 VECTOR_SIZE = 512
+
+# How many recently seen products we remember per user.
+#
+# Without a limit this list grows forever, and we read the whole thing back
+# on every single feed request. Worse, once a user has seen every product
+# the feed returns nothing at all and they are stuck.
+#
+# Keeping only the most recent 500 means older products quietly become
+# available again, so the feed never runs dry and repeats come back
+# gradually instead of all at once after a reset.
+SEEN_LIMIT = 500
 
 # Reuse a small pool of database connections.
 # Stale connections are checked before use and old/idle connections are recycled.
@@ -87,8 +96,8 @@ def get_user(user_id):
 def update_user(user_id, tastes, newly_seen):
     """Save the new taste and add the products we just showed them.
 
-    The || means "append" in Postgres, so we only send the new ids
-    instead of the user's whole history every time.
+    The || means "append" in Postgres. The slice at the end keeps only the
+    most recent SEEN_LIMIT ids, so this list can never grow without bound.
     """
     numbers = [float(x) for x in tastes.flatten()]
 
@@ -96,15 +105,20 @@ def update_user(user_id, tastes, newly_seen):
         db.execute("""
             UPDATE user_taste
             SET vector = %s,
-                seen_ids = seen_ids || %s
+                seen_ids = (seen_ids || %s)[
+                    GREATEST(array_length(seen_ids || %s, 1) - %s + 1, 1)
+                    :
+                ]
             WHERE user_id = %s
-        """, (numbers, newly_seen, user_id))
+        """, (numbers, newly_seen, newly_seen, SEEN_LIMIT, user_id))
 
 
 def clear_seen(user_id):
     """Forget which products the user has been shown, but keep their taste.
 
     Used when someone has seen the whole catalogue and the feed runs dry.
+    With SEEN_LIMIT in place this should rarely be needed, but it is kept
+    for an explicit "start fresh" button.
     """
     with connect() as db:
         db.execute(
