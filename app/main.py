@@ -144,9 +144,8 @@ def trending(gender: str, window: str = "7d", limit: int = 20,
     if gender not in recommend.ALLOWED_GENDER:
         raise HTTPException(400, "gender must be Male or Female")
 
-    if window not in ("1d", "7d", "30d"):
-        raise HTTPException(400, "window must be 1d, 7d or 30d")
-
+    if window not in ("1d", "7d", "30d", "most_liked"):
+        raise HTTPException(400, "window must be 1d, 7d, 30d or most_liked")
     brands = brand.split(",") if brand else None
     allowed = recommend.ALLOWED_GENDER[gender]
 

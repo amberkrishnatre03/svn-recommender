@@ -22,15 +22,22 @@ def main():
     days_old = (now - events["createdAt"]).dt.total_seconds() / 86400
     events["score"] = events["weight"] * 0.5 ** (days_old.clip(lower=0) / 3)
 
+    # most_liked ignores the fading and just counts likes
+    events["likes"] = (events["action"] == "Likes").astype(int)
+
     # brand, style and category are copied in so the app can filter on them
     # without us having to look anything up at request time
     info = catalog.products.set_index("product_id")
 
     rows = []
-    for window, days in [("1d", 1), ("7d", 7), ("30d", 30)]:
+    for window, days in [("1d", 1), ("7d", 7), ("30d", 30), ("most_liked", 30)]:
         recent = events[events["createdAt"] >= now - pd.Timedelta(days=days)]
 
-        ranked = (recent.groupby("product_id")["score"].sum()
+        # trending fades old activity away, most_liked does not, so one
+        # means "hot right now" and the other means "loved overall"
+        column = "likes" if window == "most_liked" else "score"
+
+        ranked = (recent.groupby("product_id")[column].sum()
                         .sort_values(ascending=False).head(200))
 
         for rank, (product_id, score) in enumerate(ranked.items(), start=1):
