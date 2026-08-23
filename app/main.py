@@ -9,12 +9,11 @@ The API your backend calls.
 # python -m uvicorn app.main:app --reload
 
 from pathlib import Path
-
+from app import catalog, database, recommend, vectors
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
-from app import database, recommend, vectors
 
 app = FastAPI(title="SVN Recommendations")
 
@@ -131,7 +130,41 @@ def build_and_save(user_id, tastes, gender, seen):
     database.update_user(user_id, tastes, shown)
 
     return {"products": products, "count": len(products)}
+@app.get("/trending")
+def trending(gender: str, window: str = "7d", limit: int = 20):
+    """Most interacted-with products, worked out by the trending job.
 
+    An empty list is a normal answer, not an error. A narrow window on a
+    quiet day genuinely has nothing to show.
+    """
+    if gender not in recommend.ALLOWED_GENDER:
+        raise HTTPException(400, "gender must be Male or Female")
+
+    if window not in ("1d", "7d", "30d"):
+        raise HTTPException(400, "window must be 1d, 7d or 30d")
+
+    allowed = recommend.ALLOWED_GENDER[gender]
+
+    products = []
+    for product_id in database.get_trending(window, limit * 5):
+        if not catalog.has_product(product_id):
+            continue
+
+        row = catalog.row_of_product[product_id]
+
+        # Trending is worked out across everyone, so filter to this user's
+        # gender here rather than storing a separate list per gender.
+        if catalog.products["gender"].iloc[row] not in allowed:
+            continue
+
+        product = catalog.get_product(row)
+        product["source"] = "trending"
+        products.append(product)
+
+        if len(products) == limit:
+            break
+
+    return {"products": products, "count": len(products), "window": window}
 
 @app.get("/")
 def tester():

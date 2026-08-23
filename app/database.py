@@ -125,3 +125,14 @@ def clear_seen(user_id):
             "UPDATE user_taste SET seen_ids = '{}' WHERE user_id = %s",
             (user_id,)
         )
+
+def get_trending(window, limit):
+    """Product ids for one trending window, best first."""
+    with connect() as db:
+        rows = db.execute(
+            'SELECT product_id FROM trending_products'
+            ' WHERE "window" = %s ORDER BY "rank" LIMIT %s',
+            (window, limit)
+        ).fetchall()
+
+    return [r[0] for r in rows]
