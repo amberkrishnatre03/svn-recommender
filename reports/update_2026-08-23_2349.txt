@@ -1,0 +1,8 @@
+PRODUCT UPDATE  2026-08-23 23:49
+added     0
+removed   0
+total     0
+took      0.0 min
+STATUS    FAILED
+reason    missing columns: title
+nothing changed, live data untouched

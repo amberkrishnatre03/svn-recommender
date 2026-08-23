@@ -16,17 +16,54 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+# Backend gives us this URL later. Until then we take a file path instead.
+BACKEND_URL = os.getenv("BACKEND_URL")
+
+# The columns we cannot work without. Better to stop straight away with a
+# clear message than fail halfway through building.
+NEEDED = ["product_id", "title", "brand", "gender", "category",
+          "subcategory", "style", "price", "primary_image", "is_active"]
+
 LIVE = "data"
 NEW = "data_new"
 OLD = "data_old"
 
+def get_new_list():
+    """Where the new product list comes from."""
+    if not BACKEND_URL:
+        return sys.argv[1]
+
+    print("fetching products from backend...")
+    products = pd.read_csv(BACKEND_URL + "/internal/products.csv")
+    products.to_csv("/tmp/new_products.csv", index=False)
+    print("got", len(products), "products")
+    return "/tmp/new_products.csv"
+
+
+def check_columns(products):
+    """Is this file the shape we expect?"""
+    missing = [c for c in NEEDED if c not in products.columns]
+    if missing:
+        return "missing columns: " + ", ".join(missing)
+
+    if products["product_id"].duplicated().any():
+        return "the same product_id appears more than once"
+
+    if products["product_id"].isna().any():
+        return "some rows have no product_id"
+
+    return None
 
 def main():
-    new_csv = sys.argv[1]
     started = datetime.now()
+    new_csv = get_new_list()
 
     old = pd.read_csv(LIVE + "/products_clean.csv")
     new = pd.read_csv(new_csv)
+
+    problem = check_columns(new)
+    if problem:
+        return stop(problem, started, 0, 0)
 
     added = len(set(new["product_id"]) - set(old["product_id"]))
     removed = len(set(old["product_id"]) - set(new["product_id"]))
