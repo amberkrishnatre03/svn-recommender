@@ -13,7 +13,7 @@ from psycopg_pool import ConnectionPool
 
 # Change 1234 to the password you set when installing Postgres.
 
-ADDRESS = os.getenv("DATABASE_URL")
+ADDRESS = os.getenv("DATABASE_URL")     # storedn  inside render variable as databaseurl
 
 # Each taste vector is 512 numbers. A user has one per style they picked,
 # so we store them flattened end to end and reshape them on the way out.
@@ -26,7 +26,7 @@ pool = ConnectionPool(
     min_size=1,
     max_size=5,
     check=ConnectionPool.check_connection,
-    max_idle=300,
+    max_idle=3000,
     max_lifetime=1800,
 )
 
