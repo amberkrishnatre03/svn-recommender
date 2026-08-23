@@ -130,9 +130,13 @@ def build_and_save(user_id, tastes, gender, seen):
     database.update_user(user_id, tastes, shown)
 
     return {"products": products, "count": len(products)}
+
 @app.get("/trending")
-def trending(gender: str, window: str = "7d", limit: int = 20):
+def trending(gender: str, window: str = "7d", limit: int = 20,
+             brand: str = None, style: str = None, category: str = None):
     """Most interacted-with products, worked out by the trending job.
+
+    brand takes a comma separated list, so the app can send several at once.
 
     An empty list is a normal answer, not an error. A narrow window on a
     quiet day genuinely has nothing to show.
@@ -143,10 +147,11 @@ def trending(gender: str, window: str = "7d", limit: int = 20):
     if window not in ("1d", "7d", "30d"):
         raise HTTPException(400, "window must be 1d, 7d or 30d")
 
+    brands = brand.split(",") if brand else None
     allowed = recommend.ALLOWED_GENDER[gender]
 
     products = []
-    for product_id in database.get_trending(window, limit * 5):
+    for product_id in database.get_trending(window, limit * 5, brands, style, category):
         if not catalog.has_product(product_id):
             continue
 

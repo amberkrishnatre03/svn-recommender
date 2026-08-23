@@ -126,13 +126,31 @@ def clear_seen(user_id):
             (user_id,)
         )
 
-def get_trending(window, limit):
-    """Product ids for one trending window, best first."""
+def get_trending(window, limit, brands=None, style=None, category=None):
+    """Product ids for one trending window, best first.
+
+    brands, style and category are optional filters. Passing none of them
+    returns the whole list.
+    """
+    sql = 'SELECT product_id FROM trending_products WHERE "window" = %s'
+    values = [window]
+
+    if brands:
+        sql += " AND brand = ANY(%s)"
+        values.append(brands)
+
+    if style:
+        sql += " AND style = %s"
+        values.append(style)
+
+    if category:
+        sql += " AND category = %s"
+        values.append(category)
+
+    sql += ' ORDER BY "rank" LIMIT %s'
+    values.append(limit)
+
     with connect() as db:
-        rows = db.execute(
-            'SELECT product_id FROM trending_products'
-            ' WHERE "window" = %s ORDER BY "rank" LIMIT %s',
-            (window, limit)
-        ).fetchall()
+        rows = db.execute(sql, values).fetchall()
 
     return [r[0] for r in rows]
