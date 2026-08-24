@@ -9,12 +9,16 @@ import psycopg
 
 from app import catalog
 
+# Where the real interaction log comes from. The mock file below is only
+# a stand in so this can be tested before backend's API exists.
+EVENTS_URL = os.getenv("EVENTS_URL")
+
 WEIGHTS = {"Likes": 1, "AddToCart": 3, "Purchase": 5}
 
 
 def main():
     now = pd.Timestamp.now(tz="UTC")
-    events = pd.read_csv("data/mock_product_events.csv")
+    events = pd.read_csv(EVENTS_URL or "data/mock_product_events.csv")
     events["createdAt"] = pd.to_datetime(events["createdAt"], utc=True)
 
     # score = how much the action counts, faded by how old it is

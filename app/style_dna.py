@@ -18,20 +18,27 @@ EVENTS_FILE = Path(__file__).parent.parent / "data" / "mock_product_events.csv"
 POINTS = {"Likes": 1, "AddToCart": 3, "Purchase": 5}
 
 HOW_MANY = 50
+import os
 
+# Where the real interaction log comes from. Falls back to the mock file
+# so this works before backend's API exists.
+EVENTS_URL = os.getenv("EVENTS_URL")
 
 def recent_interactions(user_id):
     """This user's most recent positive interactions.
 
-    When the backend event API exists, only this function changes.
+    When EVENTS_URL is set we ask backend for just this user's rows,
+    which is why the limit cannot hide someone's history. Without it
+    we fall back to the mock file for testing.
     """
-    events = pd.read_csv(EVENTS_FILE)
+    if EVENTS_URL:
+        events = pd.read_csv(f"{EVENTS_URL}?user_id={user_id}&limit={HOW_MANY}")
+    else:
+        events = pd.read_csv(EVENTS_FILE)
+        events = events[events["user_id"] == user_id]
 
-    mine = events[events["user_id"] == user_id]
-    mine = mine[mine["action"].isin(POINTS)]
-
+    mine = events[events["action"].isin(POINTS)]
     return mine.tail(HOW_MANY)
-
 
 def build(user_id):
     """Their taste as percentages, biggest first."""
