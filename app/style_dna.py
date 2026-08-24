@@ -8,8 +8,8 @@ from collections import Counter
 from pathlib import Path
 
 import pandas as pd
+from app import catalog, database
 
-from app import catalog
 
 EVENTS_FILE = Path(__file__).parent.parent / "data" / "mock_product_events.csv"
 
@@ -46,8 +46,20 @@ def build(user_id):
         points[style] += POINTS[row["action"]]
 
     total = sum(points.values())
+
+    # Nothing to count yet. Fall back to the styles they picked at
+    # onboarding, split evenly, so a new user still sees something.
     if total == 0:
-        return {"based_on": 0, "dna": []}
+        chosen = database.get_styles(user_id)
+        if not chosen:
+            return {"based_on": 0, "dna": []}
+
+        share = round(100 / len(chosen))
+        return {
+            "based_on": 0,
+            "from": "onboarding",
+            "dna": [{"style": s, "percent": share} for s in chosen],
+        }
 
     dna = [
         {"style": style, "percent": round(100 * score / total)}

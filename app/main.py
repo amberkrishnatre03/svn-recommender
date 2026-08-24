@@ -81,7 +81,7 @@ def onboarding(request: OnboardingRequest):
             "none of those styles exist. valid styles are: " + ", ".join(valid),
         )
 
-    database.save_new_user(request.user_id, request.gender, tastes)
+    database.save_new_user(request.user_id, request.gender, tastes, request.styles)
 
     return build_and_save(request.user_id, tastes, request.gender, [])
 

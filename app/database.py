@@ -48,17 +48,18 @@ def create_table():
     """Run this once, when setting up."""
     with connect() as db:
         db.execute("""
-            CREATE TABLE IF NOT EXISTS user_taste (
+            CREATE TABLE IF NOT EXISTS user_taste (                        
                 user_id  TEXT PRIMARY KEY,
                 gender   TEXT NOT NULL,
                 vector   FLOAT8[] NOT NULL,
-                seen_ids TEXT[] NOT NULL DEFAULT '{}'
+                seen_ids TEXT[] NOT NULL DEFAULT '{}',
+                styles   TEXT[] NOT NULL DEFAULT '{}'
             )
         """)
     print("table ready")
 
 
-def save_new_user(user_id, gender, tastes):
+def save_new_user(user_id, gender, tastes, styles):
     """Called when a user finishes onboarding.
 
     If the user already exists, this wipes their taste and their history
@@ -68,13 +69,14 @@ def save_new_user(user_id, gender, tastes):
 
     with connect() as db:
         db.execute("""
-            INSERT INTO user_taste (user_id, gender, vector, seen_ids)
-            VALUES (%s, %s, %s, '{}')
+            INSERT INTO user_taste (user_id, gender, vector, seen_ids, styles)
+            VALUES (%s, %s, %s, '{}', %s)
             ON CONFLICT (user_id) DO UPDATE
             SET gender = EXCLUDED.gender,
                 vector = EXCLUDED.vector,
-                seen_ids = '{}'
-        """, (user_id, gender, numbers))
+                seen_ids = '{}',
+                styles = EXCLUDED.styles
+        """, (user_id, gender, numbers, styles))
 
 
 def get_user(user_id):
@@ -154,3 +156,16 @@ def get_trending(window, limit, brands=None, style=None, category=None):
         rows = db.execute(sql, values).fetchall()
 
     return [r[0] for r in rows]
+
+def get_styles(user_id):
+    """The styles this user picked at onboarding.
+
+    Used as a fallback for the profile page when someone has not swiped
+    on anything yet, so their slider is not just empty.
+    """
+    with connect() as db:
+        row = db.execute(
+            "SELECT styles FROM user_taste WHERE user_id = %s", (user_id,)
+        ).fetchone()
+
+    return list(row[0]) if row else []
