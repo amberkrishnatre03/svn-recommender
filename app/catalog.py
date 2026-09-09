@@ -33,7 +33,7 @@ for row_number, product_id in enumerate(products["product_id"]):            # bu
 # startup makes each feed about three times faster.
 category_of = products["category"].tolist()           # copies two columns out of pandads table into oridinary lists  needed for recommended.py
 subcategory_of = products["subcategory"].tolist()     # why ? because reading out of tables is slow reading out of lists is fast
-brand_of = products["brand"].tolist()
+brand_of = products["brand"].tolist()                # gets the brand list
 
 ready_products = []
 for p in products.to_dict("records"):          # to_dict turns the products pandas table inton dictionary , one per row with column names as keys
