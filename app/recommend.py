@@ -20,7 +20,7 @@ FEED = {
 # A cap must be big enough that the feed can actually be filled. With a feed
 # of 20 and only 4 brands, a cap of 4 could never be met, the topup pass would
 # take over and every limit here would be ignored.
-MAX_SAME_CATEGORY = 12     # at most 12 Topwear in a feed of 20
+MAX_SAME_CATEGORY = 7     # at most 12 Topwear in a feed of 20
 MAX_SAME_TYPE = 5          # at most 5 T-Shirts, 5 Shirts, and so on
 MAX_SAME_BRAND = 8         # at most 8 from any one brand
 
@@ -28,7 +28,7 @@ MAX_SAME_BRAND = 8         # at most 8 from any one brand
 # from. The 20th best match is usually as good as the 3rd, so always taking
 # them strictly in order makes the feed look the same every time for no real
 # gain in relevance.
-PERSONALISED_POOL = 60
+PERSONALISED_POOL = 500
 
 # How much a brand the user picked at onboarding gets pushed up the ranking.
 # This is a nudge, not a filter: other brands still appear, they just have to
