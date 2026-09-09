@@ -20,7 +20,7 @@ FEED = {
 # A cap must be big enough that the feed can actually be filled. With a feed
 # of 20 and only 4 brands, a cap of 4 could never be met, the topup pass would
 # take over and every limit here would be ignored.
-MAX_SAME_CATEGORY = 7     # at most 12 Topwear in a feed of 20
+MAX_SAME_CATEGORY = 7     # at most 7 Topwear and 7 bottomwear in a feed of 20
 MAX_SAME_TYPE = 5          # at most 5 T-Shirts, 5 Shirts, and so on
 MAX_SAME_BRAND = 8         # at most 8 from any one brand
 
@@ -179,12 +179,6 @@ def build_feed(user_tastes, gender, seen_ids, preferred_brands=None):
         product["score"] = round(float(score_of[row]), 3)
         feed.append(product)
 
-    # The special cards are added last, so without this every stack would end
-    # on trending, sponsored and wildcard. Spread them through instead, but
-    # keep the strongest personalised card first so the stack opens well.
-    if len(feed) > 2:
-        rest = feed[1:]
-        random.shuffle(rest)
-        feed = [feed[0]] + rest
-
+    # Best match first, weakest last. Without this the stack would end on trending, sponsored and wildcard, because those are added after the personalised cards.
+    feed.sort(key=lambda p: -p["score"])             # sorted by scores lambda just reduces the function
     return feed
