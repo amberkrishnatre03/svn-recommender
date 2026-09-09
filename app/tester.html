@@ -194,8 +194,8 @@ function showCard() {
       </div>
     </div>
     <div class="actions">
-      <button class="act" onclick="swipe('left_swipe')">&#10007;<small>SKIP</small></button>
-      <button class="act" onclick="swipe('right_swipe')">&#10084;<small>LIKE</small></button>
+      <button class="act" onclick="swipe('dislike')">&#10007;<small>SKIP</small></button>
+      <button class="act" onclick="swipe('like')">&#10084;<small>LIKE</small></button>
       <button class="act" onclick="swipe('wishlist')">&#9733;<small>WISH</small></button>
       <button class="act" onclick="swipe('add_to_cart')">&#128722;<small>CART</small></button>
     </div>`;
@@ -211,12 +211,12 @@ function swipe(action) {
   pending.push({product_id: p.product_id, action: action});
   seen++;
   swipesSinceFetch++;
-  if (action === "left_swipe") skipped++; else liked++;
+  if (action === "dislike") skipped++; else liked++;
 
   scoreTotal += p.score; scoreCount++;
 
   log(action.replace("_", " ") + "  ->  " + p.title.slice(0, 30),
-      action === "left_swipe" ? "#e74c3c" : "#2ecc71");
+      action === "dislike" ? "#e74c3c" : "#2ecc71");
 
   // Same as the real app: fetch the next feed when 3 cards remain.
   if (stack.length <= 3 && !nextStack) getNextFeed(false);

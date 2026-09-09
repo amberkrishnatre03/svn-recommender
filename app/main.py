@@ -16,58 +16,59 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
-from app import catalog, database, recommend, style_dna, vectors
+from app import catalog, database, recommend, style_dna, vectors       # loads all these files 
 
 app = FastAPI(title="SVN Recommendations")
+                                # prints table ready
+database.create_table()        # to load the database.py file and run the create table if not exists function
 
-database.create_table()
-
-# If a window has nothing in it, try a wider one. A quiet 24 hours is
-# normal, especially early on, and an empty screen looks broken.
+# If a window has nothing in it, try a wider one. A quiet 24 hours is        # this works when 1 day data not found 7 day data not found ..
+# normal, especially early on, and an empty screen looks broken.              # dictionary it is fall back functions so if 1day is not found it falls back to 7 day etc...
 WIDER_WINDOW = {"1d": "7d", "7d": "30d", "30d": None, "most_liked": None}
 
+                                                                 # model config = confiddict is reserved name pydantic looks for forbid means..
+# this is for onboarding call from backend/frontend
+class OnboardingRequest(BaseModel):                               # class x (base model) means x is base model that inherits all the pydantic validation settings
+    model_config = ConfigDict(extra="forbid")                      # forbid means -if data is not in this form then it rejects
+                                                         # if data is in wrong shape then it gives 422 automatically
+    user_id: str                                               # user id must exist and it should be in string type
+    gender: str                                               # same
+    styles: list[str]                                    # styles should be there in list form as it has multiple styles
 
-class OnboardingRequest(BaseModel):
+
+class Interaction(BaseModel):                                # interactions should be in this form ( this isnt for request api its the interaction column
+    model_config = ConfigDict(extra="forbid")               # that is inside feed request that consists of user id and interactions and inside interactions it should have this
+
+    product_id: str                       # "product id" : "product123"
+    action: str                           # "action" = "right swipe"
+
+
+class FeedRequest(BaseModel):                                   # this is for feed call from backend
     model_config = ConfigDict(extra="forbid")
 
     user_id: str
-    gender: str
-    styles: list[str]
+    interactions: list[Interaction]                      # list of objects defined above ( see class interaction ) see above
+                                                        # example : {    "user_id": "usr_1",
+                                                       # "interactions": [{"product_id": "ABC", "action": "right_swipe"}] }
 
-
-class Interaction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    product_id: str
-    action: str
-
-
-class FeedRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    user_id: str
-    interactions: list[Interaction]
-
-
-class ResetRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class ResetRequest(BaseModel):                            # this is for feed reset call that removes all the seen products but keeps their taste vector same
+    model_config = ConfigDict(extra="forbid")              # only user id is needed
 
     user_id: str
 
 
-@app.post("/onboarding")
-def onboarding(request: OnboardingRequest):
-    """New user picked their styles. Build their taste and give them a feed.
-
-    Calling this again for an existing user starts them completely fresh.
+@app.post("/onboarding")                                              # backend/frontend calls this domain link/onboarding
+def onboarding(request: OnboardingRequest):                                      #
+    """New user picked their styles. Build their taste vector and give them a feed.
+    Calling this again for an existing user starts them completely fresh. basically account reset .or preferance reset
     """
     if request.gender not in recommend.ALLOWED_GENDER:
         raise HTTPException(400, "gender must be Male or Female")
-
+# {"user_id": "test_1", "gender": "Male", "styles": ["Streetwear", "Oversized"]}
     if not request.styles:
         raise HTTPException(400, "styles cannot be empty")
 
-    wanted = "Men" if request.gender == "Male" else "Women"
+    wanted = recommend.ALLOWED_GENDER[request.gender][0]       # wanted = Men
 
     # If none of the style names match our catalogue, that is bad input from
     # the caller, not a broken service. Say so with a 400 and list what we
@@ -99,10 +100,15 @@ def feed(request: FeedRequest):
     # Move their taste based on what they did. Unknown products and unknown
     # action names are skipped inside apply_interaction, so one bad row can
     # never take down the whole request.
-    for one in request.interactions:
-        tastes = vectors.apply_interaction(tastes, one.product_id, one.action)
+    acted_on = []
 
-    return build_and_save(request.user_id, tastes, gender, seen)
+    for i in request.interactions:
+        if i.product_id in acted_on:
+            continue
+        acted_on.append(i.product_id)
+        tastes = vectors.apply_interaction(tastes, i.product_id, i.action)
+
+    return build_and_save(request.user_id, tastes, gender, seen + acted_on, acted_on)
 
 
 @app.post("/reset")
@@ -192,14 +198,20 @@ def catalog_styles():
     return catalog.products["style"].dropna().unique().tolist()
 
 
-def build_and_save(user_id, tastes, gender, seen):
-    """Make a feed, then remember what we showed so it never repeats."""
+def build_and_save(user_id, tastes, gender, seen, acted_on=None):
+    """Make a feed, then remember what the user actually swiped on."""
     products = recommend.build_feed(tastes, gender, seen)
 
-    shown = [p["product_id"] for p in products]
-    database.update_user(user_id, tastes, shown)
+    if acted_on is None:
+        acted_on = []
 
-    return {"products": products, "count": len(products)}
+    database.update_user(user_id, tastes, acted_on)
+
+    return {
+        "products": products,
+        "count": len(products),
+        "exhausted": len(products) == 0,
+    }
 
 
 @app.get("/")

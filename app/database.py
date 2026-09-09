@@ -26,16 +26,16 @@ VECTOR_SIZE = 512
 # Keeping only the most recent 500 means older products quietly become
 # available again, so the feed never runs dry and repeats come back
 # gradually instead of all at once after a reset.
-SEEN_LIMIT = 500
+SEEN_LIMIT = 5000
 
 # Reuse a small pool of database connections.
 # Stale connections are checked before use and old/idle connections are recycled.
 pool = ConnectionPool(
     ADDRESS,
-    min_size=1,
-    max_size=5,
+    min_size=1,             #
+    max_size=20,
     check=ConnectionPool.check_connection,
-    max_idle=3000,
+    max_idle=3000,        #
     max_lifetime=1800,
 )
 
@@ -66,17 +66,17 @@ def save_new_user(user_id, gender, tastes, styles):
     and starts them fresh. That is what "redo my onboarding" means.
     """
     numbers = [float(x) for x in tastes.flatten()]
-
-    with connect() as db:
-        db.execute("""
-            INSERT INTO user_taste (user_id, gender, vector, seen_ids, styles)
+                                                                                         # change the gender,vector,seenid,styles in the same user id
+    with connect() as db:                                                               # on conflict user id do update ,this means upsert and we cannot insert a row with same user id because thats primary key and code woudl fail so we will
+        db.execute("""                                 
+            INSERT INTO user_taste (user_id, gender, vector, seen_ids, styles)      
             VALUES (%s, %s, %s, '{}', %s)
-            ON CONFLICT (user_id) DO UPDATE
-            SET gender = EXCLUDED.gender,
+            ON CONFLICT (user_id) DO UPDATE                    
+            SET gender = EXCLUDED.gender,                       
                 vector = EXCLUDED.vector,
                 seen_ids = '{}',
                 styles = EXCLUDED.styles
-        """, (user_id, gender, numbers, styles))
+        """, (user_id, gender, numbers, styles))                                 # user id doesnt change if it exists but all other values change
 
 
 def get_user(user_id):
@@ -85,25 +85,27 @@ def get_user(user_id):
         row = db.execute(
             "SELECT gender, vector, seen_ids FROM user_taste WHERE user_id = %s",
             (user_id,)
-        ).fetchone()
+        ).fetchone()                     # fetchcone returns one row / fetchall is to return all the rows
 
-    if row is None:
+    if row is None:                     # if row is none ie. no rows exists then it returns none
         return None
 
-    gender, vector, seen_ids = row
-    tastes = np.array(vector, dtype="float32").reshape(-1, VECTOR_SIZE)
-    return gender, tastes, seen_ids
+    gender, vector, seen_ids = row                                                # gets the gender and vector and seen id from row
+    tastes = np.array(vector, dtype="float32").reshape(-1, VECTOR_SIZE)           # converts to arrays, the vectors could be 1024 numbers or more into its vector size and then arranges them into rows where every single row has 512 numbers
+    return gender, tastes, seen_ids                                                # -1 means any no of rows and vector size 512 means
+                                                                                   # if vector has 5120 numbers we could get 10 rows shape(10,512)
 
+                                                                                 # reshape basically converts to rows and columns so each row has 512 columns
 
 def update_user(user_id, tastes, newly_seen):
     """Save the new taste and add the products we just showed them.
-
+                                                                                          # onboarding function
     The || means "append" in Postgres. The slice at the end keeps only the
     most recent SEEN_LIMIT ids, so this list can never grow without bound.
     """
-    numbers = [float(x) for x in tastes.flatten()]
-
-    with connect() as db:
+    numbers = [float(x) for x in tastes.flatten()]                                     # now 2 rows with 512 columns are converted into one single row with 1024 float numbers
+                                                                                      # basically convert the taste matrix into one list of floats
+    with connect() as db:                                                             # after db.execute its the sql
         db.execute("""
             UPDATE user_taste
             SET vector = %s,
@@ -112,7 +114,7 @@ def update_user(user_id, tastes, newly_seen):
                     :
                 ]
             WHERE user_id = %s
-        """, (numbers, newly_seen, newly_seen, SEEN_LIMIT, user_id))
+        """, (numbers, newly_seen, newly_seen, SEEN_LIMIT, user_id))                  # this is the python values to be put on %s,  %s is the placeholders
 
 
 def clear_seen(user_id):
