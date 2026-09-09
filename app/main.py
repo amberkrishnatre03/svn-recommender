@@ -37,14 +37,14 @@ class OnboardingRequest(BaseModel):                               # class x (bas
 
 
 class Interaction(BaseModel):                                # interactions should be in this form ( this isnt for request api its the interaction column
-    model_config = ConfigDict(extra="forbid")               # that is inside feed request that consists of user id and interactions and inside interactions it should have this
+    model_config = ConfigDict(extra="ignore")               # that is inside feed request that consists of user id and interactions and inside interactions it should have this
 
     product_id: str                       # "product id" : "product123"
     action: str                           # "action" = "right swipe"
 
 
 class FeedRequest(BaseModel):                                   # this is for feed call from backend
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     user_id: str
     interactions: list[Interaction]                      # list of objects defined above ( see class interaction ) see above
