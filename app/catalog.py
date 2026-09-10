@@ -20,20 +20,20 @@ if len(products) != len(vectors):                            # each row is same 
 # Every fashion product shares a big "generic clothing" direction, which makes
 # everything look similar to everything else. Removing the average leaves only
 # what makes each product different, so the ranking becomes much sharper. eg random products scored 0.42 similarity but after this its 0 and unrelated goes to negative
-vectors = vectors - vectors.mean(axis=0)
-vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-
-
+vectors = vectors - vectors.mean(axis=0)                              # mean of all rows not columns , and linalgnorm gives the length of each row
+vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)     # keep dimensions true makesthe dimension ( 4140,1 instead of 4140,)
+                                                                        # helps to further do multiplicatiopns and operations on vectors
+                                                                      # dividing each row by its length rescales every vector to unit lenght 1 and now dot product between two vectors is thier cosine similarity
 row_of_product = {}                                                 # dicstionory to store the product id / table search 2.8 s and now its under 0.6 ms/ 5 thousand times fasster
 for row_number, product_id in enumerate(products["product_id"]):            # builds a dictionray that maps product_id to its row number
-    row_of_product[product_id] = row_number
+    row_of_product[product_id] = row_number                             # enumurate gives you (position,item) eg : 0,bewakoofshirt    1,snitch
 
 # Reading single cells out of a pandas table is slow, and we do it thousands of
 # times per request. Copying what we need into plain Python lists once at
 # startup makes each feed about three times faster.
 category_of = products["category"].tolist()           # copies two columns out of pandads table into oridinary lists  needed for recommended.py
 subcategory_of = products["subcategory"].tolist()     # why ? because reading out of tables is slow reading out of lists is fast
-brand_of = products["brand"].tolist()                # gets the brand list
+brand_of = products["brand"].tolist()                # gets the brand list all values inside a list
 
 ready_products = []
 for p in products.to_dict("records"):          # to_dict turns the products pandas table inton dictionary , one per row with column names as keys
@@ -52,7 +52,7 @@ for p in products.to_dict("records"):          # to_dict turns the products pand
 print("loaded", len(products), "products")
 
 
-def has_product(product_id):        # ASK WHETHER WE KNOW THIS PRODUCT
+def has_product(product_id):                        # ASK WHETHER WE KNOW THIS PRODUCT
     return product_id in row_of_product             # A swipe can arrive for product not in our catalogue without this check_vector function would crash
                                                     # with key error and whole request would fail, callers check this first nd skip anything we dont recognise
 

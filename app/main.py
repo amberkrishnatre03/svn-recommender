@@ -15,7 +15,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
-
+from dotenv import load_dotenv                                        # add this before database import
+load_dotenv()
 from app import catalog, database, recommend, style_dna, vectors       # loads all these files 
 
 app = FastAPI(title="SVN Recommendations")
@@ -108,7 +109,7 @@ def feed(request: FeedRequest):
         acted_on.append(i.product_id)
         tastes = vectors.apply_interaction(tastes, i.product_id, i.action)
 
-    return build_and_save(request.user_id, tastes, gender, seen + acted_on, acted_on)
+    return build_and_save(request.user_id, tastes, gender, seen + acted_on)
 
 
 @app.post("/reset")
@@ -198,14 +199,11 @@ def catalog_styles():
     return catalog.products["style"].dropna().unique().tolist()
 
 
-def build_and_save(user_id, tastes, gender, seen, acted_on=None):
-    """Make a feed, then remember what the user actually swiped on."""
+def build_and_save(user_id, tastes, gender, seen):
+    """Make a feed, then remember what we showed them."""
     products = recommend.build_feed(tastes, gender, seen)
 
-    if acted_on is None:
-        acted_on = []
-
-    database.update_user(user_id, tastes, acted_on)
+    database.update_user(user_id, tastes, [p["product_id"] for p in products])
 
     return {
         "products": products,
