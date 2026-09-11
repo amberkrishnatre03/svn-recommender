@@ -8,7 +8,7 @@ of one average that sits in between and matches neither.
 
 import numpy as np
 
-from app import catalog
+from app import catalog, database
 
 # How far one action moves the user's taste towards (or away from) a product.
 # Unknown action names are ignored, so the spelling must match what the app sends.
@@ -26,32 +26,42 @@ def make_unit_length(vector):
 
 
 def starting_tastes(styles, genders):
-    """One taste vector per style: the average of that style's products for these genders.
-
-    Returns an empty table if none of the styles exist, so the caller can say so.
-    """
+    """One taste vector per style: the average vector of that style's products for these genders.
+    Styles with no products are skipped, so the result can be empty."""
     tastes = []
     for style in styles:
-        rows = np.where((catalog.style_of == style) & np.isin(catalog.gender_of, genders))[0]
-        if len(rows) > 0:
-            tastes.append(make_unit_length(catalog.vectors[rows].mean(axis=0)))
-
-    return np.array(tastes, dtype="float32").reshape(-1, catalog.vectors.shape[1])
+        total = np.zeros(database.VECTOR_SIZE)
+        count = 0
+        for product in catalog.products.values():
+            if product["style"] == style and product["gender"] in genders:
+                total = total + product["vector"]
+                count = count + 1
+        if count > 0:
+            tastes.append(make_unit_length(total / count))
+    return np.array(tastes, dtype="float32")      # a table: one row per style
 
 
 def learn(tastes, product_id, action):
-    """Move the closest taste vector towards the product (or away, for a dislike)."""
+    """Move the user's closest taste towards the product (or away from it, for a dislike)."""
     if action not in WEIGHTS:
         print("WARNING unknown action:", action, "- swipe ignored")
         return tastes
     if not catalog.has_product(product_id):
-        return tastes                               # product not in our catalogue, skip it
+        return tastes                              # product not in our catalogue, skip it
 
-    product = catalog.get_vector(product_id)
-    closest = int(np.argmax(tastes @ product))      # the taste this product is most like
+    product_vector = catalog.get_vector(product_id)
 
-    moved = tastes[closest] + WEIGHTS[action] * product
-    if np.linalg.norm(moved) < 1e-6:                # almost impossible, but never divide by zero
+    # Which of the user's tastes is this product most like?
+    closest = 0
+    best_match = -999
+    for number in range(len(tastes)):
+        match = np.dot(tastes[number], product_vector)
+        if match > best_match:
+            best_match = match
+            closest = number
+
+    moved = tastes[closest] + WEIGHTS[action] * product_vector
+    if np.linalg.norm(moved) < 1e-6:               # almost impossible, but never divide by zero
         return tastes
 
     tastes = tastes.copy()

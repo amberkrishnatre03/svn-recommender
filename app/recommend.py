@@ -1,5 +1,7 @@
 """
 Builds one feed of 20 products: 14 personalised, 2 trending, 2 sponsored, 2 wildcard.
+
+The idea: compare the user's taste with every product they may see, then pick the best.
 """
 
 import random
@@ -15,7 +17,7 @@ FEED = {
     "sponsored": 2,
     "wildcard": 2,
 }
-FEED_SIZE = sum(FEED.values())
+FEED_SIZE = 20
 
 # Which product genders each user gender may see
 ALLOWED_GENDER = {
@@ -34,89 +36,108 @@ MAX_SAME_BRAND = 8
 PERSONALISED_POOL = 100
 
 
-def allowed_rows(gender, seen_ids):
-    """Row numbers of products this user may see: right gender, not seen yet."""
-    keep = np.isin(catalog.gender_of, ALLOWED_GENDER[gender])
-    for product_id in seen_ids:
-        row = catalog.row_of.get(product_id)
-        if row is not None:
-            keep[row] = False
-    return np.where(keep)[0]
+def match_score(product_vector, tastes):
+    """How well a product matches the user: its match with the closest of their tastes."""
+    best = -999
+    for taste in tastes:
+        match = float(np.dot(product_vector, taste))
+        if match > best:
+            best = match
+    return best
 
 
-def fits(row, counts):
+def fits(product, counts):
     """True if adding this product keeps the feed within the variety limits."""
-    return (counts.get(catalog.category_of[row], 0) < MAX_SAME_CATEGORY
-            and counts.get(catalog.type_of[row], 0) < MAX_SAME_TYPE
-            and counts.get(catalog.brand_of[row], 0) < MAX_SAME_BRAND)
+    if counts.get("category:" + str(product["category"]), 0) >= MAX_SAME_CATEGORY:
+        return False
+    if counts.get("type:" + str(product["subcategory"]), 0) >= MAX_SAME_TYPE:
+        return False
+    if counts.get("brand:" + str(product["brand"]), 0) >= MAX_SAME_BRAND:
+        return False
+    return True
 
 
-def pick(rows, scores, how_many, chosen, counts, pool_size=None):
-    """Pick up to how_many rows, best score first, skipping chosen ones and respecting the limits."""
-    order = rows[np.argsort(-scores)]               # best match first
-    if pool_size:
-        order = list(order[:pool_size])
-        random.shuffle(order)                       # mix up the best ones
-
-    picked = []
-    for row in order:
-        if len(picked) == how_many:
+def pick(candidates, how_many, why, feed, counts):
+    """Add up to how_many products from candidates to the feed, in order, respecting the limits.
+    feed is a dictionary: product_id -> why it was picked."""
+    added = 0
+    for product_id in candidates:
+        if added == how_many:
             break
-        if row in chosen or not fits(row, counts):
+        if product_id in feed:
             continue
-        picked.append(row)
-        chosen.add(row)
-        for key in (catalog.category_of[row], catalog.type_of[row], catalog.brand_of[row]):
+        product = catalog.products[product_id]
+        if not fits(product, counts):
+            continue
+        feed[product_id] = why
+        for key in ["category:" + str(product["category"]),
+                    "type:" + str(product["subcategory"]),
+                    "brand:" + str(product["brand"])]:
             counts[key] = counts.get(key, 0) + 1
-    return picked
+        added = added + 1
 
 
 def build_feed(tastes, gender, seen_ids):
-    """Up to 20 products for this user, best match first. Empty list if nothing is left."""
-    rows = allowed_rows(gender, seen_ids)
-    if len(rows) == 0:
+    """Up to 20 products for this user, best match first. An empty list if nothing is left."""
+    allowed = ALLOWED_GENDER[gender]
+    seen = set(seen_ids)
+
+    # 1. Compare the user's taste with every product they may see
+    scores = {}                                    # product_id -> how well it matches
+    for product_id, product in catalog.products.items():
+        if product["gender"] not in allowed:
+            continue
+        if product_id in seen:
+            continue
+        scores[product_id] = match_score(product["vector"], tastes)
+
+    if len(scores) == 0:
         return []
 
-    # Each product's score is how well it matches the closest of the user's tastes
-    scores = (catalog.vectors[rows] @ tastes.T).max(axis=1)
-    score_of = dict(zip(rows, scores))
+    # 2. Product ids from best match to worst
+    ranked = sorted(scores, key=scores.get, reverse=True)
 
-    chosen = set()      # rows already in the feed
+    feed = {}           # product_id -> why it was picked
     counts = {}         # how many of each category / type / brand so far
-    feed = []           # (row, why it was picked)
 
-    for row in pick(rows, scores, FEED["personalised"], chosen, counts, PERSONALISED_POOL):
-        feed.append((row, "personalised"))
+    # 3. Personalised: 14 at random from the best 100
+    best = ranked[:PERSONALISED_POOL]
+    random.shuffle(best)
+    pick(best, FEED["personalised"], "personalised", feed, counts)
 
-    trending = catalog.is_trending[rows]
-    for row in pick(rows[trending], scores[trending], FEED["trending"], chosen, counts):
-        feed.append((row, "trending"))
+    # 4. Trending and sponsored: the best matching ones among those
+    trending = []
+    sponsored = []
+    for product_id in ranked:
+        if catalog.products[product_id]["is_trending"]:
+            trending.append(product_id)
+        if catalog.products[product_id]["sponsored"]:
+            sponsored.append(product_id)
+    pick(trending, FEED["trending"], "trending", feed, counts)
+    pick(sponsored, FEED["sponsored"], "sponsored", feed, counts)
 
-    sponsored = catalog.is_sponsored[rows]
-    for row in pick(rows[sponsored], scores[sponsored], FEED["sponsored"], chosen, counts):
-        feed.append((row, "sponsored"))
+    # 5. Wildcard: random products, so the user can discover styles outside their taste
+    leftover = []
+    for product_id in ranked:
+        if product_id not in feed:
+            leftover.append(product_id)
+    for product_id in random.sample(leftover, min(FEED["wildcard"], len(leftover))):
+        feed[product_id] = "wildcard"
 
-    # Wildcard: random products, so the user can discover styles outside their taste
-    leftover = [row for row in rows if row not in chosen]
-    for row in random.sample(leftover, min(FEED["wildcard"], len(leftover))):
-        feed.append((row, "wildcard"))
-        chosen.add(row)
-
-    # If any slot could not be filled, top up with the best remaining matches.
-    # The variety limits are ignored here: a full feed is better than a gap.
-    for row in rows[np.argsort(-scores)]:
+    # 6. If a slot could not be filled, top up with the best remaining matches.
+    #    The variety limits are ignored here: a full feed is better than a gap.
+    for product_id in ranked:
         if len(feed) >= FEED_SIZE:
             break
-        if row not in chosen:
-            feed.append((row, "topup"))
-            chosen.add(row)
+        if product_id not in feed:
+            feed[product_id] = "topup"
 
+    # 7. Turn the product ids into cards for the app, best match first
+    chosen = sorted(feed, key=scores.get, reverse=True)
     cards = []
-    for row, source in feed:
-        card = catalog.get_card(row)
-        card["source"] = source
-        card["score"] = round(float(score_of[row]), 3)
+    for product_id in chosen:
+        card = catalog.get_card(product_id)
+        card["source"] = feed[product_id]
+        card["score"] = round(scores[product_id], 3)
         cards.append(card)
-
-    cards.sort(key=lambda card: -card["score"])    # best match first
     return cards

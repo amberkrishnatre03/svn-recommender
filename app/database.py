@@ -13,6 +13,7 @@ import os
 
 import numpy as np
 import pandas as pd
+from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 VECTOR_SIZE = 512       # every FashionCLIP vector has 512 numbers
@@ -152,13 +153,21 @@ def save_products(products, vectors):
 
 
 def load_products():
-    """The whole catalogue as (products table, vectors). Row i of one is row i of the other."""
+    """Every active product as a dictionary: its details plus its own vector.
+
+    Example: {"product_id": "SNITCH_859...", "title": "Slim Fit Shirt", ...,
+              "vector": array of 512 numbers}
+    The details and the numbers come from the same database row, so they always belong together.
+    """
     with pool.connection() as db:
-        rows = db.execute(
-            "SELECT " + ", ".join(PRODUCT_COLUMNS) + ", embedding FROM products "
-            "WHERE is_active = TRUE ORDER BY product_id"
+        cursor = db.cursor(row_factory=dict_row)          # each row comes back as a dictionary
+        rows = cursor.execute(
+            "SELECT " + ", ".join(PRODUCT_COLUMNS) + ", embedding FROM products WHERE is_active = TRUE"
         ).fetchall()
 
-    products = pd.DataFrame([row[:-1] for row in rows], columns=PRODUCT_COLUMNS)
-    vectors = np.array([row[-1] for row in rows], dtype="float32")
-    return products, vectors
+    products = []
+    for row in rows:
+        row["vector"] = np.array(row["embedding"], dtype="float32")   # the 512 numbers as numpy
+        del row["embedding"]                                          # not needed twice
+        products.append(row)
+    return products

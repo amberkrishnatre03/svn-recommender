@@ -1,7 +1,7 @@
 """
 Turns every active product into 512 numbers and stores them in Postgres.
 
-    goes in:   products_5k.csv                one row per product
+    goes in:   data/products_5k.csv           one row per product
     comes out: products table in Postgres     each active product + its 512 numbers
 
 Run once, from the repo folder:   python build_embeddings.py
@@ -20,11 +20,12 @@ from dotenv import load_dotenv
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 
-load_dotenv()                     # reads DATABASE_URL from .env and makes the variable available to the program, must run before app.database is imported
-from app import database          # database.py looks at database url the moment its loaded so env file has to be preloaded
+load_dotenv()                     # reads DATABASE_URL from .env, must run before app.database is imported
+from app import database
 
-# Which CSV to read. Set PRODUCTS_CSV to use another file, otherwise products_5k.csv
+# Which CSV to read. Set PRODUCTS_CSV to use another file, otherwise data/products_5k.csv
 CSV_FILE = os.getenv("PRODUCTS_CSV", "data/products_5k.csv")
+
 # How much each part counts in the final vector. Must add up to 1.
 IMAGE_WEIGHT = 0.7                # the picture shows the actual look, so it counts more
 TEXT_WEIGHT = 0.3                 # the text adds brand, fabric, fit
@@ -43,6 +44,7 @@ print(len(products), "products in", CSV_FILE)
 # Only active products with an image link get numbers. Inactive ones are not stored.
 products = products[products["is_active"] == True]
 products = products[products["primary_image"].notna()]
+products = products[products["style"].notna()]      # every product needs a style, the database requires it
 products = products.drop_duplicates("product_id")   # the same product twice would stop the save, keep the first one
 products = products.reset_index(drop=True)      # row numbers 0,1,2... again, so position = row
 products["price"] = pd.to_numeric(products["price"], errors="coerce")   # a price that isn't a number becomes empty, instead of failing the save at the end
