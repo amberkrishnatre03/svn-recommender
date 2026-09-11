@@ -49,6 +49,8 @@ def create_tables():
                 styles    TEXT[] NOT NULL DEFAULT '{}'
             )
         """)
+        # points per style (added later; users saved before this get an empty list)
+        db.execute("ALTER TABLE user_taste ADD COLUMN IF NOT EXISTS style_points FLOAT8[] NOT NULL DEFAULT '{}'")
         db.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 product_id      TEXT PRIMARY KEY,
@@ -72,45 +74,47 @@ def create_tables():
 
 # ---------- users ----------
 
-def save_new_user(user_id, gender, tastes, styles):
+def save_new_user(user_id, gender, tastes, styles, points):
     """Create the user, or start them completely fresh if they already exist."""
     numbers = tastes.flatten().tolist()          # (2, 512) table -> one list of 1,024 numbers
     with pool.connection() as db:
         db.execute("""
-            INSERT INTO user_taste (user_id, gender, vector, seen_ids, styles)
-            VALUES (%s, %s, %s, '{}', %s)
+            INSERT INTO user_taste (user_id, gender, vector, seen_ids, styles, style_points)
+            VALUES (%s, %s, %s, '{}', %s, %s)
             ON CONFLICT (user_id) DO UPDATE SET
                 gender = EXCLUDED.gender,
                 vector = EXCLUDED.vector,
                 seen_ids = '{}',
-                styles = EXCLUDED.styles
-        """, (user_id, gender, numbers, styles))
+                styles = EXCLUDED.styles,
+                style_points = EXCLUDED.style_points
+        """, (user_id, gender, numbers, styles, [float(p) for p in points]))
 
 
 def get_user(user_id):
-    """Returns (gender, tastes, seen_ids), or None if we have never seen this user."""
+    """Returns (gender, tastes, seen_ids, styles, points), or None if we have never seen this user."""
     with pool.connection() as db:
         row = db.execute(
-            "SELECT gender, vector, seen_ids FROM user_taste WHERE user_id = %s",
+            "SELECT gender, vector, seen_ids, styles, style_points FROM user_taste WHERE user_id = %s",
             (user_id,),
         ).fetchone()
 
     if row is None:
         return None
 
-    gender, numbers, seen_ids = row
+    gender, numbers, seen_ids, styles, points = row
     tastes = np.array(numbers, dtype="float32").reshape(-1, VECTOR_SIZE)   # back into rows of 512
-    return gender, tastes, list(seen_ids)
+    return gender, tastes, list(seen_ids), list(styles), list(points)
 
 
-def update_user(user_id, tastes, seen_ids):
-    """Save the new taste and the list of products they have seen."""
+def update_user(user_id, tastes, styles, points, seen_ids):
+    """Save the new taste, styles, points and the list of products they have seen."""
     numbers = tastes.flatten().tolist()
     seen_ids = seen_ids[-SEEN_LIMIT:]            # keep only the most recent ones
     with pool.connection() as db:
         db.execute(
-            "UPDATE user_taste SET vector = %s, seen_ids = %s WHERE user_id = %s",
-            (numbers, seen_ids, user_id),
+            "UPDATE user_taste SET vector = %s, styles = %s, style_points = %s, seen_ids = %s"
+            " WHERE user_id = %s",
+            (numbers, styles, [float(p) for p in points], seen_ids, user_id),
         )
 
 

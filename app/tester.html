@@ -85,8 +85,9 @@
     <select id="gender">
       <option>Male</option>
       <option>Female</option>
+      <option>Other</option>
     </select>
-    <label>Pick 2 or more styles</label>
+    <label>Pick 1 or more styles</label>
     <div id="styles"></div>
     <button class="go" onclick="startUser()">Start swiping</button>
   </div>
@@ -144,7 +145,7 @@ function log(text, colour) {
 
 async function startUser() {
   const chosen = [...document.querySelectorAll(".chip.on")].map(c => c.textContent);
-  if (chosen.length < 2) { alert("Pick at least 2 styles"); return; }
+  if (chosen.length < 1) { alert("Pick at least 1 style"); return; }
 
   const gender = document.getElementById("gender").value;
   userId = "test_" + Date.now();
@@ -196,14 +197,16 @@ function showCard() {
     <div class="actions">
       <button class="act" onclick="swipe('dislike')">&#10007;<small>SKIP</small></button>
       <button class="act" onclick="swipe('like')">&#10084;<small>LIKE</small></button>
-      <button class="act" onclick="swipe('wishlist')">&#9733;<small>WISH</small></button>
+      <button class="act" onclick="swipe('purchase')">&#9733;<small>BUY</small></button>
       <button class="act" onclick="swipe('add_to_cart')">&#128722;<small>CART</small></button>
     </div>`;
 
   updateStats();
 }
 
-let pending = [];   // swipes not yet sent to the server
+let pending = [];          // swipes not yet sent to the server
+let fetching = false;      // true while a /feed request is on its way: never send two at once
+let showWhenReady = false; // the stack ran out while waiting: show the new cards as soon as they arrive
 
 function swipe(action) {
   const p = stack.shift();
@@ -219,23 +222,32 @@ function swipe(action) {
       action === "dislike" ? "#e74c3c" : "#2ecc71");
 
   // Same as the real app: fetch the next feed when 3 cards remain.
-  if (stack.length <= 3 && !nextStack) getNextFeed(false);
+  if (stack.length <= 3 && !nextStack && !fetching) getNextFeed(false);
 
   showCard();
 }
 
 async function getNextFeed(showNow) {
+  if (showNow) showWhenReady = true;
+  if (fetching) return;              // one request at a time, the same rule the real app must follow
+  fetching = true;
+
   const sending = pending;
   pending = [];
   swipesSinceFetch = 0;
 
   log("POST /feed  sending " + sending.length + " swipes", "#f60");
 
-  const answer = await fetch("/feed", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({user_id: userId, interactions: sending})
-  }).then(r => r.json());
+  let answer;
+  try {
+    answer = await fetch("/feed", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({user_id: userId, interactions: sending})
+    }).then(r => r.json());
+  } finally {
+    fetching = false;                // even if the request failed, allow the next one
+  }
 
   feeds++;
 
@@ -249,7 +261,10 @@ async function getNextFeed(showNow) {
   log("got " + answer.products.length + " products (held for later)", "#2ecc71");
   nextStack = answer.products;
 
-  if (showNow) useNextStack();
+  if (showWhenReady) {
+    showWhenReady = false;
+    useNextStack();
+  }
   updateStats();
 }
 
