@@ -240,14 +240,29 @@ async function getNextFeed(showNow) {
 
   let answer;
   try {
-    answer = await fetch("/feed", {
+    const response = await fetch("/feed", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({user_id: userId, interactions: sending})
-    }).then(r => r.json());
-  } finally {
-    fetching = false;                // even if the request failed, allow the next one
+    });
+    if (!response.ok) {
+      throw new Error("server error " + response.status + ": " + (await response.text()).slice(0, 150));
+    }
+    answer = await response.json();
+  } catch (error) {
+    // Keep the swipes so they are sent again, show what went wrong, and let the user retry.
+    // The real app must do the same: never throw swipes away when a request fails.
+    pending = sending.concat(pending);
+    fetching = false;
+    log("POST /feed FAILED: " + error.message, "#e74c3c");
+    if (showWhenReady) {
+      document.getElementById("stage").innerHTML =
+        "<div class='empty'>Couldn't get the next stack.<br><br>" +
+        "<button class='act' onclick='getNextFeed(true)'>Try again</button></div>";
+    }
+    return;
   }
+  fetching = false;
 
   feeds++;
 
