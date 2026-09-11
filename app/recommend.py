@@ -1,5 +1,5 @@
 """
-Builds the feed: 12 personalised, 4 trending, 1 sponsored, 3 wildcard.
+Builds one feed of 20 products: 14 personalised, 2 trending, 2 sponsored, 2 wildcard.
 """
 
 import random
@@ -8,177 +8,115 @@ import numpy as np
 
 from app import catalog
 
-# How many of each kind of card in one feed.
+# How many of each kind of card in one feed
 FEED = {
     "personalised": 14,
     "trending": 2,
     "sponsored": 2,
     "wildcard": 2,
 }
+FEED_SIZE = sum(FEED.values())
 
-# Limits so one feed is not all t-shirts from one brand.
-# A cap must be big enough that the feed can actually be filled. With a feed
-# of 20 and only 4 brands, a cap of 4 could never be met, the topup pass would
-# take over and every limit here would be ignored.
-MAX_SAME_CATEGORY = 12     # at most 12 Topwear and 12 bottomwear in a feed of 20
-MAX_SAME_TYPE = 8          # at most 8 T-Shirts, 8 Shirts, and so on
-MAX_SAME_BRAND = 8         # at most 8 from any one brand
-
-# How many of the best matching products to sample the personalised cards
-# from. The 20th best match is usually as good as the 3rd, so always taking
-# them strictly in order makes the feed look the same every time for no real
-# gain in relevance.
-PERSONALISED_POOL = 100
-
-# How much a brand the user picked at onboarding gets pushed up the ranking.
-# This is a nudge, not a filter: other brands still appear, they just have to
-# score better to get in. A hard filter would shrink the pool so much that the
-# feed would start repeating within days.
-BRAND_BOOST = 0.15
-
-# Male users see Men's products, female users see Women's.
-# Add "Unisex" to a list later when we bring unisex products back.
+# Which product genders each user gender may see
 ALLOWED_GENDER = {
     "Male": ["Men"],
     "Female": ["Women"],
+    "Other": ["Men", "Women"],
 }
 
+# Limits so one feed is not all T-shirts from one brand
+MAX_SAME_CATEGORY = 12
+MAX_SAME_TYPE = 8
+MAX_SAME_BRAND = 8
 
-def find_allowed_rows(gender, seen_ids):
-    """Every product this user is allowed to see right now.
+# Personalised cards are drawn at random from the best 100 matches, not always
+# the top 14 in order, so the feed does not look the same every time.
+PERSONALISED_POOL = 100
 
-    This is the hard filter. Gender is a business rule and similarity
-    can never override it.
-    """
-    allowed = ALLOWED_GENDER[gender]
 
-    keep = catalog.products["gender"].isin(allowed)
-    keep = keep & catalog.products["is_active"]
-    keep = keep & ~catalog.products["product_id"].isin(seen_ids)
-
+def allowed_rows(gender, seen_ids):
+    """Row numbers of products this user may see: right gender, not seen yet."""
+    keep = np.isin(catalog.gender_of, ALLOWED_GENDER[gender])
+    for product_id in seen_ids:
+        row = catalog.row_of.get(product_id)
+        if row is not None:
+            keep[row] = False
     return np.where(keep)[0]
 
 
-def pick_with_variety(rows, scores, how_many, chosen, counts, pool_size=None):
-    """Take the best products, but keep the feed varied.
+def fits(row, counts):
+    """True if adding this product keeps the feed within the variety limits."""
+    return (counts.get(catalog.category_of[row], 0) < MAX_SAME_CATEGORY
+            and counts.get(catalog.type_of[row], 0) < MAX_SAME_TYPE
+            and counts.get(catalog.brand_of[row], 0) < MAX_SAME_BRAND)
 
-    counts holds how many of each category, subcategory and brand are
-    already in this feed, so the limits apply across the whole feed and
-    not just inside one section.
 
-    pool_size shuffles the best N before picking, so the same user does
-    not see the same products in the same order every time.
-    """
-    picked = []
-    already = set(chosen)
-
-    # Best score first.
-    order = np.argsort(-scores)
-
+def pick(rows, scores, how_many, chosen, counts, pool_size=None):
+    """Pick up to how_many rows, best score first, skipping chosen ones and respecting the limits."""
+    order = rows[np.argsort(-scores)]               # best match first
     if pool_size:
-        order = order[:pool_size]
-        np.random.shuffle(order)
+        order = list(order[:pool_size])
+        random.shuffle(order)                       # mix up the best ones
 
-    for row in rows[order]:
+    picked = []
+    for row in order:
         if len(picked) == how_many:
             break
-
-        if row in already:
+        if row in chosen or not fits(row, counts):
             continue
-
-        category = catalog.category_of[row]
-        product_type = catalog.subcategory_of[row]
-        brand = catalog.brand_of[row]
-
-        if counts.get(category, 0) >= MAX_SAME_CATEGORY:
-            continue
-
-        if counts.get(product_type, 0) >= MAX_SAME_TYPE:
-            continue
-
-        if counts.get(brand, 0) >= MAX_SAME_BRAND:
-            continue
-
         picked.append(row)
-        counts[category] = counts.get(category, 0) + 1
-        counts[product_type] = counts.get(product_type, 0) + 1
-        counts[brand] = counts.get(brand, 0) + 1
-
+        chosen.add(row)
+        for key in (catalog.category_of[row], catalog.type_of[row], catalog.brand_of[row]):
+            counts[key] = counts.get(key, 0) + 1
     return picked
 
 
-def build_feed(user_tastes, gender, seen_ids, preferred_brands=None):
-    """Return one feed of products for this user."""
-    allowed_rows = find_allowed_rows(gender, seen_ids)
-
-    # Nothing left to show at all.
-    if len(allowed_rows) == 0:
+def build_feed(tastes, gender, seen_ids):
+    """Up to 20 products for this user, best match first. Empty list if nothing is left."""
+    rows = allowed_rows(gender, seen_ids)
+    if len(rows) == 0:
         return []
 
-    # Score each product by its best match to any of the user's tastes.
-    scores = (catalog.vectors[allowed_rows] @ user_tastes.T).max(axis=1)
+    # Each product's score is how well it matches the closest of the user's tastes
+    scores = (catalog.vectors[rows] @ tastes.T).max(axis=1)
+    score_of = dict(zip(rows, scores))
 
-    # Brands they picked at onboarding get a small bump, so their favourites
-    # surface more often without pushing everything else out of the feed.
-    if preferred_brands:
-        brands_here = catalog.products["brand"].values[allowed_rows]
-        scores = scores + np.isin(brands_here, preferred_brands) * BRAND_BOOST
+    chosen = set()      # rows already in the feed
+    counts = {}         # how many of each category / type / brand so far
+    feed = []           # (row, why it was picked)
 
-    # So we can look up any row's score later.
-    score_of = dict(zip(allowed_rows, scores))
+    for row in pick(rows, scores, FEED["personalised"], chosen, counts, PERSONALISED_POOL):
+        feed.append((row, "personalised"))
 
-    chosen = []
-    sources = []
-    counts = {}
+    trending = catalog.is_trending[rows]
+    for row in pick(rows[trending], scores[trending], FEED["trending"], chosen, counts):
+        feed.append((row, "trending"))
 
-    def add(rows, name):
-        chosen.extend(rows)
-        sources.extend([name] * len(rows))
+    sponsored = catalog.is_sponsored[rows]
+    for row in pick(rows[sponsored], scores[sponsored], FEED["sponsored"], chosen, counts):
+        feed.append((row, "sponsored"))
 
-    # 1. Personalised: sampled from the products closest to their taste.
-    add(pick_with_variety(allowed_rows, scores, FEED["personalised"],
-                          chosen, counts, pool_size=PERSONALISED_POOL),
-        "personalised")
+    # Wildcard: random products, so the user can discover styles outside their taste
+    leftover = [row for row in rows if row not in chosen]
+    for row in random.sample(leftover, min(FEED["wildcard"], len(leftover))):
+        feed.append((row, "wildcard"))
+        chosen.add(row)
 
-    # 2. Trending: popular right now, still matched to their taste.
-    is_trending = catalog.products["is_trending"].values[allowed_rows]
-    add(pick_with_variety(allowed_rows[is_trending], scores[is_trending],
-                          FEED["trending"], chosen, counts), "trending")
-
-    # 3. Sponsored: paid placement, still the best matching one.
-    is_sponsored = catalog.products["sponsored"].values[allowed_rows]
-    add(pick_with_variety(allowed_rows[is_sponsored], scores[is_sponsored],
-                          FEED["sponsored"], chosen, counts), "sponsored")
-
-    # 4. Wildcard: something random, so the user can discover new styles.
-    # Score is ignored on purpose. If we only ever show products near their
-    # current taste we can sharpen that taste but never find out it moved.
-    taken = set(chosen)
-    leftover = [row for row in allowed_rows if row not in taken]
-    if leftover:
-        how_many = min(FEED["wildcard"], len(leftover))
-        picks = np.random.choice(leftover, size=how_many, replace=False)
-        add([int(row) for row in picks], "wildcard")
-
-    # If a slot could not be filled, top up with anything left.
-    # Variety is dropped here on purpose: a full feed beats a varied gap.
-    wanted = sum(FEED.values())
-    taken = set(chosen)
-    for row in allowed_rows[np.argsort(-scores)]:
-        if len(chosen) >= wanted:
+    # If any slot could not be filled, top up with the best remaining matches.
+    # The variety limits are ignored here: a full feed is better than a gap.
+    for row in rows[np.argsort(-scores)]:
+        if len(feed) >= FEED_SIZE:
             break
-        if row not in taken:
-            add([row], "topup")
-            taken.add(row)
+        if row not in chosen:
+            feed.append((row, "topup"))
+            chosen.add(row)
 
-    # Turn the chosen rows into products, telling the app why each was picked.
-    feed = []
-    for row, source in zip(chosen, sources):
-        product = catalog.get_product(row)
-        product["source"] = source
-        product["score"] = round(float(score_of[row]), 3)
-        feed.append(product)
+    cards = []
+    for row, source in feed:
+        card = catalog.get_card(row)
+        card["source"] = source
+        card["score"] = round(float(score_of[row]), 3)
+        cards.append(card)
 
-    # Best match first, weakest last. Without this the stack would end on trending, sponsored and wildcard, because those are added after the personalised cards.
-    feed.sort(key=lambda p: -p["score"])             # sorted by scores lambda just reduces the function
-    return feed
+    cards.sort(key=lambda card: -card["score"])    # best match first
+    return cards

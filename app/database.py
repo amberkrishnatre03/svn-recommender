@@ -1,173 +1,164 @@
 """
-Remembers each user's taste between requests.
+Everything that talks to Postgres.
 
-One table, one row per user:
-    user_id   who they are
-    gender    Male or Female
-    vector    their taste vectors, stored flattened end to end
-    seen_ids  the last SEEN_LIMIT products they have been shown
+Two tables:
+    user_taste   one row per user: gender, taste vectors, seen products, styles
+    products     one row per product: its details and its 512 numbers
+
+The address of the database comes from the DATABASE_URL environment variable,
+so the same code works on your Mac (.env file) and on the cloud (cloud settings).
 """
+
 import os
+
 import numpy as np
+import pandas as pd
 from psycopg_pool import ConnectionPool
 
-ADDRESS = os.getenv("DATABASE_URL")     # stored inside render variable as DATABASE_URL
+VECTOR_SIZE = 512       # every FashionCLIP vector has 512 numbers
+SEEN_LIMIT = 5000       # we remember at most this many shown products per user
 
-# Each taste vector is 512 numbers. A user has one per style they picked,
-# so we store them flattened end to end and reshape them on the way out.
-VECTOR_SIZE = 512
+# The product columns we store, same names as in the products CSV
+PRODUCT_COLUMNS = ["product_id", "title", "brand", "gender", "category", "subcategory",
+                   "style", "price", "in_stock", "is_active", "primary_image",
+                   "is_trending", "sponsored", "embedding_text"]
 
-# How many recently seen products we remember per user.
-#
-# Without a limit this list grows forever, and we read the whole thing back
-# on every single feed request. Worse, once a user has seen every product
-# the feed returns nothing at all and they are stuck.
-#
-# Keeping only the most recent 500 means older products quietly become
-# available again, so the feed never runs dry and repeats come back
-# gradually instead of all at once after a reset.
-SEEN_LIMIT = 5000
-
-# Reuse a small pool of database connections.
-# Stale connections are checked before use and old/idle connections are recycled.
+# A small set of open connections that every request shares, instead of
+# opening a new connection each time (which is slow).
 pool = ConnectionPool(
-    ADDRESS,
-    min_size=1,             #
+    os.getenv("DATABASE_URL"),
+    min_size=1,
     max_size=20,
-    check=ConnectionPool.check_connection,
-    max_idle=3000,        #
-    max_lifetime=1800,
+    check=ConnectionPool.check_connection,   # test a connection before handing it out
+    max_idle=300,                            # close connections unused for 5 minutes
+    max_lifetime=1800,                       # replace every connection after 30 minutes
+    open=True,
 )
 
 
-def connect():
-    return pool.connection()
-
-
-def create_table():
-    """Run this once, when setting up."""
-    with connect() as db:
+def create_tables():
+    """Make both tables if they do not exist yet. Safe to run every time."""
+    with pool.connection() as db:
         db.execute("""
-            CREATE TABLE IF NOT EXISTS user_taste (                        
-                user_id  TEXT PRIMARY KEY,
-                gender   TEXT NOT NULL,
-                vector   FLOAT8[] NOT NULL,
-                seen_ids TEXT[] NOT NULL DEFAULT '{}',
-                styles   TEXT[] NOT NULL DEFAULT '{}'
+            CREATE TABLE IF NOT EXISTS user_taste (
+                user_id   TEXT PRIMARY KEY,
+                gender    TEXT NOT NULL,
+                vector    FLOAT8[] NOT NULL,
+                seen_ids  TEXT[] NOT NULL DEFAULT '{}',
+                styles    TEXT[] NOT NULL DEFAULT '{}'
             )
         """)
-    print("table ready")
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                product_id      TEXT PRIMARY KEY,
+                title           TEXT,
+                brand           TEXT,
+                gender          TEXT NOT NULL,
+                category        TEXT,
+                subcategory     TEXT,
+                style           TEXT NOT NULL,
+                price           INTEGER,
+                in_stock        BOOLEAN,
+                is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+                primary_image   TEXT,
+                is_trending     BOOLEAN NOT NULL DEFAULT FALSE,
+                sponsored       BOOLEAN NOT NULL DEFAULT FALSE,
+                embedding_text  TEXT,
+                embedding       REAL[] NOT NULL
+            )
+        """)
 
+
+# ---------- users ----------
 
 def save_new_user(user_id, gender, tastes, styles):
-    """Called when a user finishes onboarding.
-
-    If the user already exists, this wipes their taste and their history
-    and starts them fresh. That is what "redo my onboarding" means.
-    """
-    numbers = [float(x) for x in tastes.flatten()]
-                                                                                         # change the gender,vector,seenid,styles in the same user id
-    with connect() as db:                                                               # on conflict user id do update ,this means upsert and we cannot insert a row with same user id because thats primary key and code woudl fail so we will
-        db.execute("""                                 
-            INSERT INTO user_taste (user_id, gender, vector, seen_ids, styles)      
+    """Create the user, or start them completely fresh if they already exist."""
+    numbers = tastes.flatten().tolist()          # (2, 512) table -> one list of 1,024 numbers
+    with pool.connection() as db:
+        db.execute("""
+            INSERT INTO user_taste (user_id, gender, vector, seen_ids, styles)
             VALUES (%s, %s, %s, '{}', %s)
-            ON CONFLICT (user_id) DO UPDATE                    
-            SET gender = EXCLUDED.gender,                       
+            ON CONFLICT (user_id) DO UPDATE SET
+                gender = EXCLUDED.gender,
                 vector = EXCLUDED.vector,
                 seen_ids = '{}',
                 styles = EXCLUDED.styles
-        """, (user_id, gender, numbers, styles))                                 # user id doesnt change if it exists but all other values change
+        """, (user_id, gender, numbers, styles))
 
 
 def get_user(user_id):
-    """Returns gender, tastes, seen_ids. Returns None if the user is new."""
-    with connect() as db:
+    """Returns (gender, tastes, seen_ids), or None if we have never seen this user."""
+    with pool.connection() as db:
         row = db.execute(
             "SELECT gender, vector, seen_ids FROM user_taste WHERE user_id = %s",
-            (user_id,)
-        ).fetchone()                     # fetchcone returns one row / fetchall is to return all the rows
+            (user_id,),
+        ).fetchone()
 
-    if row is None:                     # if row is none ie. no rows exists then it returns none
+    if row is None:
         return None
 
-    gender, vector, seen_ids = row                                                # gets the gender and vector and seen id from row
-    tastes = np.array(vector, dtype="float32").reshape(-1, VECTOR_SIZE)           # converts to arrays, the vectors could be 1024 numbers or more into its vector size and then arranges them into rows where every single row has 512 numbers
-    return gender, tastes, seen_ids                                                # -1 means any no of rows and vector size 512 means
-                                                                                   # if vector has 5120 numbers we could get 10 rows shape(10,512)
+    gender, numbers, seen_ids = row
+    tastes = np.array(numbers, dtype="float32").reshape(-1, VECTOR_SIZE)   # back into rows of 512
+    return gender, tastes, list(seen_ids)
 
-                                                                                 # reshape basically converts to rows and columns so each row has 512 columns
 
-def update_user(user_id, tastes, newly_seen):
-    """Save the new taste and add the products we just showed them.
-                                                                                          # onboarding function
-    The || means "append" in Postgres. The slice at the end keeps only the
-    most recent SEEN_LIMIT ids, so this list can never grow without bound.
-    """
-    numbers = [float(x) for x in tastes.flatten()]                                     # now 2 rows with 512 columns are converted into one single row with 1024 float numbers
-                                                                                      # basically convert the taste matrix into one list of floats
-    with connect() as db:                                                             # after db.execute its the sql
-        db.execute("""
-            UPDATE user_taste
-            SET vector = %s,
-                seen_ids = (seen_ids || %s)[
-                    GREATEST(array_length(seen_ids || %s, 1) - %s + 1, 1)
-                    :
-                ]
-            WHERE user_id = %s
-        """, (numbers, newly_seen, newly_seen, SEEN_LIMIT, user_id))                  # this is the python values to be put on %s,  %s is the placeholders
+def update_user(user_id, tastes, seen_ids):
+    """Save the new taste and the list of products they have seen."""
+    numbers = tastes.flatten().tolist()
+    seen_ids = seen_ids[-SEEN_LIMIT:]            # keep only the most recent ones
+    with pool.connection() as db:
+        db.execute(
+            "UPDATE user_taste SET vector = %s, seen_ids = %s WHERE user_id = %s",
+            (numbers, seen_ids, user_id),
+        )
 
 
 def clear_seen(user_id):
-    """Forget which products the user has been shown, but keep their taste.
+    """Forget which products they have seen, keep their taste."""
+    with pool.connection() as db:
+        db.execute("UPDATE user_taste SET seen_ids = '{}' WHERE user_id = %s", (user_id,))
 
-    Used when someone has seen the whole catalogue and the feed runs dry.
-    With SEEN_LIMIT in place this should rarely be needed, but it is kept
-    for an explicit "start fresh" button.
+
+# ---------- products ----------
+
+def count_products():
+    with pool.connection() as db:
+        return db.execute("SELECT count(*) FROM products").fetchone()[0]
+
+
+def save_products(products, vectors):
+    """Replace the whole catalogue with a new one.
+
+    The delete and the inserts are one transaction: if anything fails,
+    Postgres undoes all of it and the old catalogue stays.
     """
-    with connect() as db:
-        db.execute(
-            "UPDATE user_taste SET seen_ids = '{}' WHERE user_id = %s",
-            (user_id,)
-        )
+    # Postgres cannot store pandas' NaN in a text column, so blanks become None (NULL)
+    products = products[PRODUCT_COLUMNS].astype(object)
+    products = products.where(products.notna(), None)
 
-def get_trending(window, limit, brands=None, style=None, category=None):
-    """Product ids for one trending window, best first.
+    rows = []
+    for i, product in enumerate(products.to_dict("records")):
+        row = [product[column] for column in PRODUCT_COLUMNS]
+        row.append(vectors[i].tolist())          # numpy numbers -> plain Python list
+        rows.append(row)
 
-    brands, style and category are optional filters. Passing none of them
-    returns the whole list.
-    """
-    sql = 'SELECT product_id FROM trending_products WHERE "window" = %s'
-    values = [window]
+    columns = ", ".join(PRODUCT_COLUMNS) + ", embedding"
+    blanks = ", ".join(["%s"] * (len(PRODUCT_COLUMNS) + 1))
 
-    if brands:
-        sql += " AND brand = ANY(%s)"
-        values.append(brands)
+    with pool.connection() as db:                # commits at the end, undoes everything on error
+        db.execute("DELETE FROM products")
+        with db.cursor() as cur:
+            cur.executemany(f"INSERT INTO products ({columns}) VALUES ({blanks})", rows)
 
-    if style:
-        sql += " AND style = %s"
-        values.append(style)
 
-    if category:
-        sql += " AND category = %s"
-        values.append(category)
+def load_products():
+    """The whole catalogue as (products table, vectors). Row i of one is row i of the other."""
+    with pool.connection() as db:
+        rows = db.execute(
+            "SELECT " + ", ".join(PRODUCT_COLUMNS) + ", embedding FROM products "
+            "WHERE is_active = TRUE ORDER BY product_id"
+        ).fetchall()
 
-    sql += ' ORDER BY "rank" LIMIT %s'
-    values.append(limit)
-
-    with connect() as db:
-        rows = db.execute(sql, values).fetchall()
-
-    return [r[0] for r in rows]
-
-def get_styles(user_id):
-    """The styles this user picked at onboarding.
-
-    Used as a fallback for the profile page when someone has not swiped
-    on anything yet, so their slider is not just empty.
-    """
-    with connect() as db:
-        row = db.execute(
-            "SELECT styles FROM user_taste WHERE user_id = %s", (user_id,)
-        ).fetchone()
-
-    return list(row[0]) if row else []
+    products = pd.DataFrame([row[:-1] for row in rows], columns=PRODUCT_COLUMNS)
+    vectors = np.array([row[-1] for row in rows], dtype="float32")
+    return products, vectors

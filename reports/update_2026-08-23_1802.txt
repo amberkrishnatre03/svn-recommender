@@ -1,8 +1,0 @@
-PRODUCT UPDATE  2026-08-23 18:02
-added     0
-removed   3930
-total     0
-took      0.0 min
-STATUS    FAILED
-reason    new list is less than half the old one
-nothing changed, live data untouched

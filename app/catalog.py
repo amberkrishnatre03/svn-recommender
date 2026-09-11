@@ -1,47 +1,49 @@
 """
-Loads the products and their numbers into memory, one time, when the server starts till the time it is running.
+The product catalogue, kept in memory while the server runs.
+
+Loaded once from Postgres when the server starts. Every request after that
+reads from memory, which is thousands of times faster than asking the
+database each time. After uploading new products, restart the server.
 """
 
-from pathlib import Path          # tool for building file paths
-
 import numpy as np
-import pandas as pd
-                                                   # __file__ is a variable Python fills in automatically. It holds the path of the file currently running: /Users/ambertyagi/Documents/svn-recommender/app/catalog.py
-DATA = Path(__file__).parent.parent / "data"        #path(...) turns text into path object we can navigate to / parent goes up one folder ( here twice)
-                                              # /Users/ambertyagi/Documents/svn-recommender now we are here and the /data goes back into data folder
+
+from app import database
+
 print("loading catalogue...")
+database.create_tables()
+products, vectors = database.load_products()
 
-products = pd.read_csv(DATA / "products_clean.csv")         # loads the products csv
-vectors = np.load(DATA / "product_embeddings.npy")          # loads the embeddings numpy file
+if len(products) == 0:
+    raise RuntimeError("no products in the database. Run: python build_embeddings.py")
 
-if len(products) != len(vectors):                            # each row is same and ordered of both products and vectors
-    raise Exception("products and vectors do not match, rerun build_embeddings.py")          # rerun embeddings if not equal
+# Every fashion product shares a big "generic clothing" direction, so everything
+# looks similar to everything. Taking away the average leaves only what makes each
+# product different, which makes the ranking much sharper.
+vectors = vectors - vectors.mean(axis=0)
+vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)   # back to length 1
 
-# Every fashion product shares a big "generic clothing" direction, which makes
-# everything look similar to everything else. Removing the average leaves only
-# what makes each product different, so the ranking becomes much sharper. eg random products scored 0.42 similarity but after this its 0 and unrelated goes to negative
-vectors = vectors - vectors.mean(axis=0)                              # mean of all rows not columns , and linalgnorm gives the length of each row
-vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)     # keep dimensions true makesthe dimension ( 4140,1 instead of 4140,)
-                                                                        # helps to further do multiplicatiopns and operations on vectors
-                                                                      # dividing each row by its length rescales every vector to unit lenght 1 and now dot product between two vectors is thier cosine similarity
-row_of_product = {}                                                 # dicstionory to store the product id / table search 2.8 s and now its under 0.6 ms/ 5 thousand times fasster
-for row_number, product_id in enumerate(products["product_id"]):            # builds a dictionray that maps product_id to its row number
-    row_of_product[product_id] = row_number                             # enumurate gives you (position,item) eg : 0,bewakoofshirt    1,snitch
+# Columns copied out as plain arrays once, because reading a pandas table
+# cell by cell is slow and we filter on these on every request.
+gender_of = products["gender"].values
+style_of = products["style"].values
+category_of = products["category"].values
+type_of = products["subcategory"].values
+brand_of = products["brand"].values
+is_trending = products["is_trending"].values.astype(bool)
+is_sponsored = products["sponsored"].values.astype(bool)
 
-# Reading single cells out of a pandas table is slow, and we do it thousands of
-# times per request. Copying what we need into plain Python lists once at
-# startup makes each feed about three times faster.
-category_of = products["category"].tolist()           # copies two columns out of pandads table into oridinary lists  needed for recommended.py
-subcategory_of = products["subcategory"].tolist()     # why ? because reading out of tables is slow reading out of lists is fast
-brand_of = products["brand"].tolist()                # gets the brand list all values inside a list
+# product_id -> row number, so finding a product is instant
+row_of = {product_id: row for row, product_id in enumerate(products["product_id"])}
 
-ready_products = []
-for p in products.to_dict("records"):          # to_dict turns the products pandas table inton dictionary , one per row with column names as keys
-    ready_products.append({                    # PREBUILDING THE RESPONSES
+# What the app receives for each product, built once here instead of on every request
+cards = []
+for p in products.to_dict("records"):
+    cards.append({
         "product_id": p["product_id"],
         "title": p["title"],
         "brand": p["brand"],
-        "price": int(p["price"]),
+        "price": int(p["price"]) if p["price"] is not None else None,
         "image": p["primary_image"],
         "style": p["style"],
         "category": p["category"],
@@ -49,18 +51,18 @@ for p in products.to_dict("records"):          # to_dict turns the products pand
         "in_stock": bool(p["in_stock"]),
     })
 
+all_styles = sorted(set(style_of))
+
 print("loaded", len(products), "products")
 
 
-def has_product(product_id):                        # ASK WHETHER WE KNOW THIS PRODUCT
-    return product_id in row_of_product             # A swipe can arrive for product not in our catalogue without this check_vector function would crash
-                                                    # with key error and whole request would fail, callers check this first nd skip anything we dont recognise
-
-def get_vector(product_id):          # looks up the rown number then take that row of numbersw.
-    """The numbers for one product."""          # assumes the product exists which is why we have has products first
-    return vectors[row_of_product[product_id]]
+def has_product(product_id):
+    return product_id in row_of
 
 
-def get_product(row_number):               # returns one prebuilt dictionary
-    """One product as a plain dictionary, ready to send to the app."""
-    return dict(ready_products[row_number])            # dict(..) makes a copy 
+def get_vector(product_id):
+    return vectors[row_of[product_id]]
+
+
+def get_card(row):
+    return dict(cards[row])          # a copy, so adding fields later does not change the original
