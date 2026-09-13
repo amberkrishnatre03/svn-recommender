@@ -49,7 +49,7 @@ def create_tables():
                 styles    TEXT[] NOT NULL DEFAULT '{}'
             )
         """)
-        # points per style (added later; users saved before this get an empty list)
+        # score per style (added later; users saved before this get an empty list)
         db.execute("ALTER TABLE user_taste ADD COLUMN IF NOT EXISTS style_points FLOAT8[] NOT NULL DEFAULT '{}'")
         db.execute("""
             CREATE TABLE IF NOT EXISTS products (
@@ -74,7 +74,7 @@ def create_tables():
 
 # ---------- users ----------
 
-def save_new_user(user_id, gender, tastes, styles, points):
+def save_new_user(user_id, gender, tastes, styles, style_scores):
     """Create the user, or start them completely fresh if they already exist."""
     numbers = tastes.flatten().tolist()          # (2, 512) table -> one list of 1,024 numbers
     with pool.connection() as db:
@@ -87,11 +87,11 @@ def save_new_user(user_id, gender, tastes, styles, points):
                 seen_ids = '{}',
                 styles = EXCLUDED.styles,
                 style_points = EXCLUDED.style_points
-        """, (user_id, gender, numbers, styles, [float(p) for p in points]))
+        """, (user_id, gender, numbers, styles, [float(p) for p in style_scores]))
 
 
 def get_user(user_id):
-    """Returns (gender, tastes, seen_ids, styles, points), or None if we have never seen this user."""
+    """Returns (gender, tastes, seen_ids, styles, style_scores), or None if we have never seen this user."""
     with pool.connection() as db:
         row = db.execute(
             "SELECT gender, vector, seen_ids, styles, style_points FROM user_taste WHERE user_id = %s",
@@ -101,29 +101,20 @@ def get_user(user_id):
     if row is None:
         return None
 
-    gender, numbers, seen_ids, styles, points = row
+    gender, numbers, seen_ids, styles, style_scores = row
     tastes = np.array(numbers, dtype="float32").reshape(-1, VECTOR_SIZE)   # back into rows of 512
-    return gender, tastes, list(seen_ids), list(styles), list(points)
+    return gender, tastes, list(seen_ids), list(styles), list(style_scores)
 
 
-def update_user(user_id, tastes, styles, points, new_seen_ids):
-    """Save the new taste, and add the products just shown to their seen list.
-
-    new_seen_ids is only the products from THIS feed, not the whole history.
-    Postgres appends them to whatever the array holds at the moment of the write,
-    so two feeds for the same user cannot overwrite each other's cards.
-    """
+def update_user(user_id, tastes, styles, style_scores, seen_ids):
+    """Save the new taste vectors, style scores and what they have seen."""
     numbers = tastes.flatten().tolist()
+    seen_ids = seen_ids[-SEEN_LIMIT:]            # keep only the most recent ones
     with pool.connection() as db:
         db.execute(
-            """UPDATE user_taste
-               SET vector = %s, styles = %s, style_points = %s,
-                   seen_ids = (seen_ids || %s::text[])[
-                       greatest(1, cardinality(seen_ids)
-                                   + cardinality(%s::text[]) - %s + 1) : ]
-               WHERE user_id = %s""",
-            (numbers, styles, [float(p) for p in points],
-             new_seen_ids, new_seen_ids, SEEN_LIMIT, user_id),
+            "UPDATE user_taste SET vector = %s, styles = %s, style_points = %s, seen_ids = %s"
+            " WHERE user_id = %s",
+            (numbers, styles, [float(p) for p in style_scores], seen_ids, user_id),
         )
 
 

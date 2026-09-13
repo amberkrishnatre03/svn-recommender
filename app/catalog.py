@@ -7,6 +7,10 @@ Every product is stored under its product_id, together with its own vector:
 Loaded once from Postgres when the server starts. Every request after that
 reads from memory, which is much faster than asking the database each time.
 After new products are stored, restart the server so it loads them.
+
+Nothing here is hardcoded. Styles, categories, subcategories and brands are
+whatever the database happens to contain, and neighbour styles are worked out
+from the products themselves.
 """
 
 import numpy as np
@@ -38,7 +42,37 @@ for product in all_products:
 
 all_styles = sorted(styles)
 
+
+# ---------------------------------------------------------- neighbour styles
+# Which styles sit next to each other used to be a dictionary of style names
+# written by hand. That was a bug waiting to happen: adding a style to the
+# database gave it no neighbours at all, silently, so a user who picked it saw
+# only that one style.
+#
+# Instead we work it out from the catalogue. Each style's average product is its
+# "centre", and the styles whose centres are most alike are its neighbours.
+# Whatever styles the database holds, this gives every one of them neighbours.
+
+NEIGHBOURS_PER_STYLE = 2        # how many nearby styles a picked style pulls in
+
+style_centre = {}
+for style in all_styles:
+    of_this_style = [p["vector"] for p in products.values() if p["style"] == style]
+    mean = np.mean(of_this_style, axis=0)
+    length = np.linalg.norm(mean)
+    style_centre[style] = mean / length if length > 1e-9 else mean
+
+neighbours = {}
+for style in all_styles:
+    others = [s for s in all_styles if s != style]
+    others.sort(key=lambda other: float(np.dot(style_centre[style], style_centre[other])),
+                reverse=True)
+    neighbours[style] = others[:NEIGHBOURS_PER_STYLE]
+
 print("loaded", len(products), "products")
+print("styles:", ", ".join(all_styles))
+for style in all_styles:
+    print(f"   {style} -> {neighbours[style]}")
 
 
 def has_product(product_id):

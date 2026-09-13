@@ -61,13 +61,13 @@ def onboarding(request: OnboardingRequest):
         raise HTTPException(400, "pick at least 1 style")
 
     genders = recommend.ALLOWED_GENDER[request.gender]
-    tastes, styles, points = vectors.new_user(request.styles, genders)   # picked styles + neighbours
+    tastes, styles, style_scores = vectors.new_user(request.styles, genders)   # picked styles + neighbours
     if len(styles) == 0:
         raise HTTPException(400, "none of those styles exist. valid styles are: "
                             + ", ".join(catalog.all_styles))
 
-    database.save_new_user(request.user_id, request.gender, tastes, styles, points)
-    return make_feed(request.user_id, tastes, styles, points, request.gender, [])
+    database.save_new_user(request.user_id, request.gender, tastes, styles, style_scores)
+    return make_feed(request.user_id, tastes, styles, style_scores, request.gender, [])
 
 
 @app.post("/feed")
@@ -76,19 +76,19 @@ def feed(request: FeedRequest):
     user = database.get_user(request.user_id)
     if user is None:
         raise HTTPException(404, "user not found, call /onboarding first")
-    gender, tastes, seen, styles, points = user
-    if len(points) != len(styles):                 # users saved before points existed
-        points = [vectors.PICKED_POINTS] * len(styles)
+    gender, tastes, seen, styles, style_scores = user
+    if len(style_scores) != len(styles):                 # users saved before style scores existed
+        style_scores = [vectors.PICKED_STYLE_SCORE] * len(styles)
 
     done = set()
     for interaction in request.interactions:
         if interaction.product_id in done:         # same product twice in one call counts once
             continue
         done.add(interaction.product_id)
-        tastes, styles, points = vectors.learn(tastes, styles, points,
+        tastes, styles, style_scores = vectors.learn(tastes, styles, style_scores,
                                                interaction.product_id, interaction.action)
 
-    return make_feed(request.user_id, tastes, styles, points, gender, seen)
+    return make_feed(request.user_id, tastes, styles, style_scores, gender, seen)
 
 
 @app.post("/reset")
@@ -97,12 +97,12 @@ def reset(request: ResetRequest):
     user = database.get_user(request.user_id)
     if user is None:
         raise HTTPException(404, "user not found")
-    gender, tastes, seen, styles, points = user
-    if len(points) != len(styles):                 # users saved before points existed
-        points = [vectors.PICKED_POINTS] * len(styles)
+    gender, tastes, seen, styles, style_scores = user
+    if len(style_scores) != len(styles):                 # users saved before style scores existed
+        style_scores = [vectors.PICKED_STYLE_SCORE] * len(styles)
 
     database.clear_seen(request.user_id)
-    return make_feed(request.user_id, tastes, styles, points, gender, [])
+    return make_feed(request.user_id, tastes, styles, style_scores, gender, [])
 
 
 @app.get("/")
@@ -110,15 +110,14 @@ def tester():
     return FileResponse(Path(__file__).parent / "tester.html")
 
 
-def make_feed(user_id, tastes, styles, points, gender, seen):
-    """Build the next feed, then save their taste, points and everything they have now seen."""
-    products = recommend.build_feed(tastes, styles, points, gender, seen)
+def make_feed(user_id, tastes, styles, style_scores, gender, seen):
+    """Build the next feed, then save their taste, style scores and what they have now seen."""
+    products = recommend.build_feed(tastes, styles, style_scores, gender, seen)
     shown = [p["product_id"] for p in products]
-    database.update_user(user_id, tastes, styles, points, shown)
+    database.update_user(user_id, tastes, styles, style_scores, seen + shown)
 
     return {
         "products": products,
         "count": len(products),
         "exhausted": len(products) == 0,          # True: they have seen everything, offer /reset
     }
-
