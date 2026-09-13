@@ -105,16 +105,24 @@ def get_user(user_id):
     tastes = np.array(numbers, dtype="float32").reshape(-1, VECTOR_SIZE)   # back into rows of 512
     return gender, tastes, list(seen_ids), list(styles), list(style_scores)
 
+def update_user(user_id, tastes, styles, style_scores, new_seen_ids):
+    """Save the new taste vectors and style scores, and add the products just shown.
 
-def update_user(user_id, tastes, styles, style_scores, seen_ids):
-    """Save the new taste vectors, style scores and what they have seen."""
+    new_seen_ids is only the products from THIS feed, not the whole history.
+    Postgres appends them to whatever the array holds at the moment of the write,
+    so two feeds for the same user cannot overwrite each other's cards.
+    """
     numbers = tastes.flatten().tolist()
-    seen_ids = seen_ids[-SEEN_LIMIT:]            # keep only the most recent ones
     with pool.connection() as db:
         db.execute(
-            "UPDATE user_taste SET vector = %s, styles = %s, style_points = %s, seen_ids = %s"
-            " WHERE user_id = %s",
-            (numbers, styles, [float(p) for p in style_scores], seen_ids, user_id),
+            """UPDATE user_taste
+               SET vector = %s, styles = %s, style_points = %s,
+                   seen_ids = (seen_ids || %s::text[])[
+                       greatest(1, cardinality(seen_ids)
+                                   + cardinality(%s::text[]) - %s + 1) : ]
+               WHERE user_id = %s""",
+            (numbers, styles, [float(p) for p in style_scores],
+             new_seen_ids, new_seen_ids, SEEN_LIMIT, user_id),
         )
 
 
