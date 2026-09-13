@@ -114,10 +114,11 @@ def make_feed(user_id, tastes, styles, points, gender, seen):
     """Build the next feed, then save their taste, points and everything they have now seen."""
     products = recommend.build_feed(tastes, styles, points, gender, seen)
     shown = [p["product_id"] for p in products]
-    database.update_user(user_id, tastes, styles, points, seen + shown)
+    database.update_user(user_id, tastes, styles, points, shown)
 
     return {
         "products": products,
         "count": len(products),
         "exhausted": len(products) == 0,          # True: they have seen everything, offer /reset
     }
+
