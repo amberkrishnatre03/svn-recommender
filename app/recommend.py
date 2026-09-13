@@ -1,9 +1,9 @@
 """
 Builds one feed of 20 products: 14 personalised, 2 trending, 2 sponsored, 2 wildcard.
 
-The idea: compare the user's taste with every product they may see, then pick products
-that match well AND are different from each other (MMR), so the stack isn't six copies
-of the same black shirt.
+Personalised and trending/sponsored cards are picked purely by best match score.
+MMR (diversity) is only applied to wildcards, so they are genuinely different
+from the rest of the feed rather than random noise.
 """
 
 import random
@@ -33,16 +33,15 @@ MAX_SAME_CATEGORY = 12
 MAX_SAME_TYPE = 8
 MAX_SAME_BRAND = 8
 
-# Each style's cards are chosen from its best 100 matches
+# Each style's personalised cards are chosen from its best N matches
 PERSONALISED_POOL = 100
 
-# MMR: how to weigh "matches the user" against "different from the cards already picked".
-# 1.0 = only match (similar-looking cards), 0.0 = only different (random-looking cards).
-MATCH_WEIGHT = 0.5
-
-# Trending and sponsored cards are chosen from the best 50 matches
+# Trending and sponsored cards are chosen from the best N matches
 DISCOVERY_POOL = 50
 
+# Wildcard MMR weight: 0.0 = maximum diversity, 1.0 = best match (no diversity).
+# Keep this low so wildcards show the user something genuinely new.
+WILDCARD_MMR_WEIGHT = 0.1
 
 
 def fits(product, counts):
@@ -76,16 +75,17 @@ def similarity_to_feed(product, feed):
     return most_similar
 
 
-def pick(candidates, match_of, how_many, why, feed, counts, pool=DISCOVERY_POOL):
-    """Add up to how_many products from candidates to the feed, one at a time (MMR).
+def pick(candidates, match_of, how_many, why, feed, counts, pool=DISCOVERY_POOL, match_weight=1.0):
+    """Add up to how_many products from candidates to the feed.
 
-    Each time, take the candidate with the best value:
-        MATCH_WEIGHT * how well it matches the user
-        - (1 - MATCH_WEIGHT) * how much it looks like a card already in the feed
-    so every new card is a good match that is also different from what's already there.
-    candidates must be sorted best match first. Only the first `pool` candidates that still
-    fit the variety limits are compared, so we never pick a poor match just for being different.
-    match_of is a dictionary: product_id -> how well it matches. feed: product_id -> why picked.
+    match_weight=1.0 (default): pure best match, no diversity penalty.
+    match_weight < 1.0: MMR mode — each pick balances match score against
+    similarity to cards already in the feed, so picks are spread out visually.
+
+    candidates must be sorted best match first. Only the first `pool` valid
+    candidates are compared per pick so we never choose a poor match just to
+    be different.
+    match_of is a dict: product_id -> match score. feed: product_id -> why picked.
     """
     remaining = list(candidates)
     added = 0
@@ -102,13 +102,13 @@ def pick(candidates, match_of, how_many, why, feed, counts, pool=DISCOVERY_POOL)
             looked_at = looked_at + 1
             if looked_at > pool:
                 break
-            value = (MATCH_WEIGHT * match_of[product_id]
-                     - (1 - MATCH_WEIGHT) * similarity_to_feed(product, feed))
+            value = (match_weight * match_of[product_id]
+                     - (1 - match_weight) * similarity_to_feed(product, feed))
             if value > best_value:
                 best_value = value
                 best_id = product_id
 
-        if best_id is None:                        # nothing left that fits
+        if best_id is None:
             break
 
         add(best_id, why, feed, counts)
@@ -121,7 +121,6 @@ def shares_by_points(points, total):
     """Split total cards between styles in proportion to their points, e.g. 5, 1, 1 -> 10, 2, 2."""
     exact = [total * p / sum(points) for p in points]
     shares = [int(x) for x in exact]
-    # hand the cards left over to the styles that were closest to the next whole card
     by_leftover = sorted(range(len(points)), key=lambda i: exact[i] - shares[i], reverse=True)
     for i in by_leftover[:total - sum(shares)]:
         shares[i] = shares[i] + 1
@@ -134,15 +133,13 @@ def build_feed(tastes, styles, points, gender, seen_ids):
     allowed = ALLOWED_GENDER[gender]
     seen = set(seen_ids)
 
-    # Users saved by older code can have styles that don't line up with their tastes.
-    # For them, each taste gets an equal share drawn from every product, as before.
     styles_line_up = len(styles) == len(tastes)
     if len(points) != len(tastes):
         points = [1] * len(tastes)
 
-    # 1. Compare every product the user may see with each of their tastes (one per style)
-    scores = {}                                    # product_id -> its best match with any taste
-    taste_scores = []                              # one dictionary per taste: product_id -> match
+    # 1. Score every unseen product against each taste vector
+    scores = {}
+    taste_scores = []
     for taste in tastes:
         taste_scores.append({})
 
@@ -162,77 +159,58 @@ def build_feed(tastes, styles, points, gender, seen_ids):
     if len(scores) == 0:
         return []
 
-    # 2. Product ids from best match to worst, and the same list for the user's main styles:
-    #    styles with at least half the points of their strongest style. At the start that's
-    #    only the styles they picked; a neighbour style they keep liking becomes main later.
-    #    Trending, sponsored and top-up cards come from main styles first.
+    # 2. Ranked lists: all products and products from main styles only
     ranked = sorted(scores, key=scores.get, reverse=True)
-    main_styles = list(styles)                     # old users whose data doesn't line up: all styles
+    main_styles = list(styles)
     if styles_line_up and len(styles) > 0:
         main_styles = []
         for number in range(len(styles)):
             if points[number] >= max(points) / 2:
                 main_styles.append(styles[number])
-    ranked_in_styles = []
-    for product_id in ranked:
-        if catalog.products[product_id]["style"] in main_styles:
-            ranked_in_styles.append(product_id)
+    ranked_in_styles = [p for p in ranked if catalog.products[p]["style"] in main_styles]
 
-    feed = {}           # product_id -> why it was picked
-    counts = {}         # how many of each category / type / brand so far
+    feed = {}
+    counts = {}
 
-    # 3. Personalised: each style gets a share of the 14 cards by its points. A style's
-    #    share only uses products of that style, chosen from its best 100 matches with MMR.
-    #    Without the shares, a style whose products all look alike (e.g. slim-fit shirts)
-    #    scores higher and takes over the feed, even for users who never picked it.
+    # 3. Personalised: pure best match per style, no MMR (match_weight=1.0 is the default)
     shares = shares_by_points(points, FEED["personalised"])
     for number in range(len(tastes)):
         share = shares[number]
         if share == 0:
             continue
         this_taste = taste_scores[number]
-        candidates = []
-        for product_id in this_taste:
-            if not styles_line_up or catalog.products[product_id]["style"] == styles[number]:
-                candidates.append(product_id)
+        candidates = [p for p in this_taste
+                      if not styles_line_up or catalog.products[p]["style"] == styles[number]]
         best = sorted(candidates, key=this_taste.get, reverse=True)
         pick(best, this_taste, share, "personalised", feed, counts, PERSONALISED_POOL)
 
-    # A share can come up short (variety limits, or a style running out of products).
-    # Fill the gap from the best matches in the chosen styles.
+    # Fill any gap from main styles, still pure best match
     pick(ranked_in_styles, scores, FEED["personalised"] - len(feed),
          "personalised", feed, counts, PERSONALISED_POOL)
 
-    # 4. Trending and sponsored: the best matching ones, from the chosen styles first.
-    #    Other styles are only used if the chosen styles have none left.
+    # 4. Trending and sponsored: pure best match, no MMR
     for name, flag in [("trending", "is_trending"), ("sponsored", "sponsored")]:
-        in_styles = [product_id for product_id in ranked_in_styles if catalog.products[product_id][flag]]
-        others = [product_id for product_id in ranked if catalog.products[product_id][flag]]
+        in_styles = [p for p in ranked_in_styles if catalog.products[p][flag]]
+        others    = [p for p in ranked           if catalog.products[p][flag]]
         added = pick(in_styles, scores, FEED[name], name, feed, counts)
         pick(others, scores, FEED[name] - added, name, feed, counts)
 
-    # 5. Wildcard: random products, so the user can discover styles outside their taste.
-    #    They follow the variety limits too, so they can't push topwear past 12.
-    for _ in range(FEED["wildcard"]):
-        leftover = []
-        for product_id in ranked:
-            if product_id not in feed and fits(catalog.products[product_id], counts):
-                leftover.append(product_id)
-        if len(leftover) > 0:
-            add(random.choice(leftover), "wildcard", feed, counts)
+    # 5. Wildcards: MMR against the whole feed so they look genuinely different
+    #    from everything already picked. Low match_weight = high diversity.
+    wildcard_pool = [p for p in ranked if p not in feed]
+    pick(wildcard_pool, scores, FEED["wildcard"], "wildcard", feed, counts,
+         pool=len(wildcard_pool), match_weight=WILDCARD_MMR_WEIGHT)
 
-    # 6. If a slot could not be filled, top up with the best remaining matches, from the
-    #    chosen styles first. The variety limits are ignored here: a full feed is better than a gap.
+    # 6. Top up if any slot is still empty, ignoring variety limits
     for product_id in ranked_in_styles + ranked:
         if len(feed) >= FEED_SIZE:
             break
         if product_id not in feed:
             feed[product_id] = "topup"
 
-    # 7. Order: personalised first, in mixed order so one style doesn't come in a row,
-    #    then trending, sponsored, wildcard and any top-up cards at the end.
-    #    The first card is from the user's strongest style.
-    personalised = [product_id for product_id in feed if feed[product_id] == "personalised"]
+    # 7. Order: personalised first (shuffled, strongest style goes first),
+    #    then trending, sponsored, wildcard, topup
+    personalised = [p for p in feed if feed[p] == "personalised"]
     random.shuffle(personalised)
     if styles_line_up and len(styles) > 0:
         strongest = styles[points.index(max(points))]
@@ -240,7 +218,7 @@ def build_feed(tastes, styles, points, gender, seen_ids):
             if catalog.products[personalised[i]]["style"] == strongest:
                 personalised.insert(0, personalised.pop(i))
                 break
-    chosen = personalised + [product_id for product_id in feed if feed[product_id] != "personalised"]
+    chosen = personalised + [p for p in feed if feed[p] != "personalised"]
 
     cards = []
     for product_id in chosen:
